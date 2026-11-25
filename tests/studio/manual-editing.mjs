@@ -33,10 +33,48 @@ const malformedPath = join(root, "broken video.mp4");
 const unsupportedPath = join(root, "notes.txt");
 writeFileSync(malformedPath, "not a media stream");
 writeFileSync(unsupportedPath, "unsupported format");
-const token = randomBytes(32).toString("hex");
-const server = spawn(python, ["-m", "archergate.studio", "--workspace", workspace, "serve", "--port", "0", "--desktop"],
-  {env: {...process.env, ARCHERGATE_SESSION_TOKEN: token}, stdio: ["pipe", "pipe", "inherit"]});
-let browser;
+let browser, server;
+
+async function startBackend() {
+  const token = randomBytes(32).toString("hex");
+  server = spawn(python, ["-m", "archergate.studio", "--workspace", workspace, "serve", "--port", "0", "--desktop"],
+    {env: {...process.env, ARCHERGATE_SESSION_TOKEN: token}, stdio: ["pipe", "pipe", "inherit"]});
+  const lines = createInterface({input: server.stdout});
+  try {
+    const [line] = await once(lines, "line", {signal: AbortSignal.timeout(15_000)});
+    const origin = line.match(/http:\/\/127\.0\.0\.1:[0-9]+/)?.[0];
+    assert.ok(origin, line);
+    return {origin, url: `${origin}/desktop-session/${token}`};
+  } finally {
+    lines.close();
+  }
+}
+
+async function stopBackend() {
+  if (!server || server.exitCode !== null || server.signalCode !== null) return;
+  const exited = once(server, "exit", {signal: AbortSignal.timeout(15_000)});
+  server.stdin.end();
+  assert.deepEqual(await exited, [0, null]);
+}
+
+async function openWorkspace(url, selectedPaths, errors) {
+  const page = await browser.newPage({acceptDownloads: true});
+  page.setDefaultTimeout(20_000);
+  page.on("pageerror", error => errors.push(error.message));
+  await page.addInitScript(({workspacePath, selectedPaths}) => {
+    window.__AG_TEST_PATHS = [...selectedPaths];
+    window.__TAURI__ = {core: {invoke: async command => {
+      if (command === "workspace") return workspacePath;
+      if (command === "pick_media") return window.__AG_TEST_PATHS.splice(0);
+      if (command === "choose_workspace") return null;
+      throw new Error(`Unexpected desktop bridge command: ${command}`);
+    }}};
+  }, {workspacePath: workspace, selectedPaths});
+  assert.equal((await page.goto(url)).status(), 200);
+  await page.locator("#desktop-controls:not([hidden])").waitFor();
+  await page.getByText(workspace, {exact: true}).waitFor();
+  return page;
+}
 
 function hashFile(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -68,41 +106,22 @@ print(json.dumps({"duration": probe(path)["duration"],
 }
 
 try {
-  const lines = createInterface({input: server.stdout});
-  const [line] = await once(lines, "line", {signal: AbortSignal.timeout(15_000)});
-  lines.close();
-  const origin = line.match(/http:\/\/127\.0\.0\.1:[0-9]+/)?.[0];
-  assert.ok(origin, line);
+  const initial = await startBackend();
   const libs = join(process.cwd(), ".tools/browser-libs");
   const env = process.platform === "linux" ? {
     ...process.env, LD_LIBRARY_PATH: join(libs, "usr/lib/x86_64-linux-gnu"),
     XKB_CONFIG_ROOT: join(libs, "usr/share/X11/xkb"),
   } : process.env;
   browser = await chromium.launch({env});
-  const page = await browser.newPage({acceptDownloads: true});
-  page.setDefaultTimeout(20_000);
   const errors = [];
-  page.on("pageerror", error => errors.push(error.message));
-  await page.addInitScript(({workspacePath, selectedPaths}) => {
-    window.__AG_TEST_PATHS = [...selectedPaths];
-    window.__TAURI__ = {core: {invoke: async command => {
-      if (command === "workspace") return workspacePath;
-      if (command === "pick_media") return window.__AG_TEST_PATHS.splice(0);
-      if (command === "choose_workspace") return null;
-      throw new Error(`Unexpected desktop bridge command: ${command}`);
-    }}};
-  }, {workspacePath: workspace, selectedPaths: [videoPath, audioPath]});
-  const pageResponse = await page.goto(`${origin}/desktop-session/${token}`);
-  assert.equal(pageResponse.status(), 200);
-  await page.locator("#desktop-controls:not([hidden])").waitFor();
+  let page = await openWorkspace(initial.url, [videoPath, audioPath], errors);
   await page.evaluate(async () => { await document.fonts.ready; return true; });
   assert.equal(await page.evaluate(() => document.fonts.check("17px Plex")), true);
   assert.deepEqual(await page.evaluate(async fonts =>
     Promise.all(fonts.map(async font => (await fetch(`/${font}`)).status)),
   ["IBMPlexSans-Regular.woff2", "IBMPlexSans-SemiBold.woff2"]), [200, 200]);
 
-  await page.getByRole("navigation", {name: "workspace"}).getByRole("link", {name: "materials"}).click();
-  await page.getByRole("button", {name: "+ import"}).click();
+  await page.getByRole("button", {name: "import footage", exact: true}).click();
   await page.getByRole("status").getByText("2 files selected.", {exact: true}).waitFor();
   await page.locator("#import [name=provenance]").fill("Synthetic manual-edit test");
   await page.locator("#import [name=rights]").fill("Generated locally for testing");
@@ -183,13 +202,14 @@ try {
   await page.getByRole("status").getByText(/Trimmed out-point by one frame\./).waitFor({timeout: 60_000});
   const trimmedRevision = await page.locator("#edit").inputValue();
   assert.notEqual(trimmedRevision, audioRevision);
-  const rendered = page.locator("#sequence-preview video");
+  let rendered = page.locator("#sequence-preview video");
   await page.waitForFunction(() => document.querySelector("#sequence-preview video")?.readyState >= 2);
   await rendered.evaluate(video => { video.muted = true; return video.play(); });
   await page.waitForFunction(() => document.querySelector("#sequence-preview video").getVideoPlaybackQuality().totalVideoFrames >= 3);
   await rendered.evaluate(video => video.pause());
 
-  const previewPath = join(workspace, "previews", `${(await rendered.getAttribute("src")).split("/").pop()}.mp4`);
+  const previewUrl = await rendered.getAttribute("src");
+  const previewPath = join(workspace, "previews", `${previewUrl.split("/").pop()}.mp4`);
   const decoded = decodeRendered(previewPath, frameBeforeTrim, trimmedFrame);
   assert.equal(Number(decoded.duration), 4);
   assert.ok(decoded.frame_before_trim > 210, `frame before trimmed gap should be white, got ${decoded.frame_before_trim}`);
@@ -204,6 +224,7 @@ try {
   const downloadedMp4 = join(root, "exported-cut.mp4");
   await mp4.saveAs(downloadedMp4);
   assert.deepEqual(decodeRendered(downloadedMp4, frameBeforeTrim, trimmedFrame), decoded);
+  assert.equal(hashFile(downloadedMp4), hashFile(previewPath));
   const xmlDownload = page.waitForEvent("download");
   await page.getByRole("button", {name: "export xml"}).click();
   const xml = await xmlDownload;
@@ -212,20 +233,26 @@ try {
   assert.match(xmlText, /Scene%20lumi%C3%A8re\.mov/);
   assert.match(xmlText, /Musique%20caf%C3%A9\.mp3/);
 
-  await page.reload();
-  await page.waitForFunction(id => document.querySelector("#edit").value === id, trimmedRevision);
+  await page.context().close();
+  await stopBackend();
+  const reopened = await startBackend();
+  page = await openWorkspace(reopened.url, [], errors);
+  rendered = page.locator("#sequence-preview video");
+  assert.deepEqual(await page.locator("#edit").selectOption(trimmedRevision), [trimmedRevision]);
   await page.getByRole("button", {name: "render & watch"}).click();
   await page.waitForFunction(() => document.querySelector("#sequence-preview video")?.readyState >= 2);
   const reopenedUrl = await rendered.getAttribute("src");
-  const originalPreviewHash = hashFile(previewPath);
+  assert.equal(reopenedUrl, previewUrl);
+  const originalPreviewHash = hashFile(downloadedMp4);
+  assert.equal(hashFile(previewPath), originalPreviewHash);
   writeFileSync(previewPath, "damaged cache");
-  assert.equal((await page.request.get(origin + reopenedUrl, {headers: {Range: "bytes=0-15"}})).status(), 404);
-  const recovered = page.waitForResponse(response => response.url() === origin + "/api/preview" &&
+  assert.equal((await page.request.get(reopened.origin + reopenedUrl, {headers: {Range: "bytes=0-15"}})).status(), 404);
+  const recovered = page.waitForResponse(response => response.url() === reopened.origin + "/api/preview" &&
     response.request().method() === "POST" && response.ok());
   await page.getByRole("button", {name: "render & watch"}).click();
   await recovered;
   await page.waitForFunction(() => document.querySelector("#sequence-preview video")?.readyState >= 2);
-  const restoredRange = await page.request.get(origin + reopenedUrl, {headers: {Range: "bytes=0-15"}});
+  const restoredRange = await page.request.get(reopened.origin + reopenedUrl, {headers: {Range: "bytes=0-15"}});
   assert.equal(restoredRange.status(), 206);
   assert.deepEqual(await restoredRange.body(), readFileSync(previewPath).subarray(0, 16));
   assert.equal(hashFile(previewPath), originalPreviewHash);
@@ -360,13 +387,10 @@ print(max(abs(int.from_bytes(b, 'little', signed=True)) for b in __import__('ite
   await page.getByRole("button", {name: "close"}).click();
   await page.waitForFunction(count => document.querySelectorAll("#assets li").length === count, assetCount);
   assert.deepEqual(errors, []);
-  console.log("Desktop-bridge UI: import, picture/audio insert, one-frame trim, decoded MP4/XML export, saved revision reopen, corrupt cache recovery, clip split, pointer move/trim and overlapping move rejection verified");
+  console.log("Desktop-bridge UI: import, picture/audio insert, one-frame trim, decoded MP4/XML export, saved revision reopen after backend restart, corrupt cache recovery, clip split, pointer move/trim and overlapping move rejection verified");
 } finally {
   if (browser) await browser.close();
-  if (server.exitCode === null && server.signalCode === null) {
-    server.stdin.end();
-    await once(server, "exit");
-  }
+  await stopBackend();
   rmSync(root, {recursive: true, force: true});
 }
 
