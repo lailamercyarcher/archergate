@@ -1,6 +1,26 @@
 # next engineering boundary: direct visual clip editing
 
-**status:** not implemented. this is a technical requirement for the next engineering slice after workroom 03, not a claim that a timeline editor already exists.
+**status:** the reusable source-range insert operation and its desktop-authenticated local endpoint are implemented. Direct-manipulation UI and the other editing operations remain unimplemented; this is not a claim that a visual timeline editor exists.
+
+## implemented backend operation: insert source range
+
+`archergate.studio.operations.insert_source_range` creates a saved revision from an existing timeline without changing that timeline or the registered source. It inserts into an existing track only; `track_id` is the canonical track ID, whose existing `kind` must be `video` (picture) or `audio`.
+
+The local desktop API is `POST /api/timeline/insert`. Its JSON object has exactly these fields:
+
+```json
+{
+  "base_id": "interview-j",
+  "asset_id": "0123456789abcdef0123456789abcdef",
+  "track_id": "picture",
+  "source_start": 24,
+  "duration": 24,
+  "at": 48,
+  "revision_id": "interview-insert"
+}
+```
+
+`source_start`, `duration`, and `at` are nonnegative integer ticks in the base timeline's `timebase`; duration must be positive. The source interval is half-open and must fit the selected asset's stream matching the target track kind. Timeline placement is also half-open: touching an existing clip boundary is allowed, but any overlap on the selected track is rejected. This is non-ripple placement: existing clips are never moved, clips on other tracks remain independent, and unfilled gaps remain gaps. The API requires the existing ephemeral desktop session cookie and workspace header. Success returns the canonical timeline validation report for the new revision; callers can then use the existing preview route.
 
 ## problem
 

@@ -20,7 +20,7 @@ from urllib.request import urlopen
 from archergate.media import ExperimentError
 from archergate.web import PreviewHandler
 
-from . import interchange, memory, preview, reasoning, timeline
+from . import interchange, memory, operations, preview, reasoning, timeline
 from .library import run
 
 ASSETS = Path(__file__).with_name("web_assets")
@@ -185,6 +185,16 @@ class StudioHandler(PreviewHandler):
                     data = install_model()
                 case "/api/creative-revision" if self.token:
                     data = reasoning.generate(self.library, body)
+                case "/api/timeline/insert":
+                    if not self.token:
+                        self.send_error(403)
+                        return
+                    fields = {"base_id", "asset_id", "track_id", "source_start", "duration", "at", "revision_id"}
+                    if body.keys() != fields:
+                        raise ExperimentError(
+                            "Source insertion requires base_id, asset_id, track_id, source_start, duration, at and revision_id."
+                        )
+                    data = operations.insert_source_range(self.library, **body)
                 case "/api/preview":
                     data = {"key": preview.render(self.library, body.get("name"))}
                 case "/api/inspect":

@@ -3,6 +3,7 @@
 from copy import deepcopy
 from fractions import Fraction
 from math import isfinite
+from uuid import uuid4
 
 from archergate.media import ExperimentError, identifier
 
@@ -63,6 +64,61 @@ def apply(library, base_id, proposal):
         kind, clip = clips[name]
         check_effects(kind, clip["duration"], op["effects"])
         clip["effects"] = op["effects"]
+    return timeline.save(library, draft)
+
+
+def insert_source_range(library, base_id, asset_id, track_id, source_start, duration, at, revision_id):
+    from . import timeline
+
+    source = timeline.load(library, base_id)
+    draft = deepcopy(source)
+    base, _ = timeline.schema(source)
+    revision_id = identifier(revision_id)
+    if revision_id == base_id:
+        raise ExperimentError("Choose a new revision ID distinct from the source timeline.")
+    track_id = identifier(track_id)
+    at = timeline.tick(at, "Timeline insertion position")
+    source_start = timeline.tick(source_start, "Source in-point")
+    duration = timeline.tick(duration, "Source duration", minimum=1)
+
+    track = next((row for row in draft["tracks"] if row["id"] == track_id), None)
+    if track is None:
+        raise ExperimentError(f"Unknown track {track_id} in timeline {base_id}.")
+    if len(track["clips"]) >= 500:
+        raise ExperimentError(f"Track {track_id} already contains 500 clips.")
+
+    asset = library.asset(asset_id)
+    stream = asset["source"]["streams"].get(track["kind"])
+    if stream is None:
+        raise ExperimentError(f"Asset {asset_id} has no {track['kind']} stream for track {track_id}.")
+    source_in = source_start * base
+    source_out = (source_start + duration) * base
+    stream_in = Fraction(stream["start"])
+    stream_out = stream_in + Fraction(stream["duration"])
+    if not stream_in <= source_in < source_out <= stream_out:
+        raise ExperimentError(
+            f"Source range {source_start}–{source_start + duration} ticks falls outside "
+            f"the asset's {track['kind']} stream."
+        )
+
+    end = at + duration
+    for clip in track["clips"]:
+        if at < clip["at"] + clip["duration"] and clip["at"] < end:
+            raise ExperimentError(
+                f"Timeline insertion overlaps clip {clip['id']} on track {track_id}; "
+                "non-ripple insertion does not move existing clips."
+            )
+
+    track["clips"].append({
+        "id": f"insert-{uuid4().hex}",
+        "asset": asset_id,
+        "at": at,
+        "source_start": source_start,
+        "duration": duration,
+    })
+    suffix = " / insert"
+    draft["id"] = revision_id
+    draft["title"] = source["title"][:250 - len(suffix)] + suffix
     return timeline.save(library, draft)
 
 
