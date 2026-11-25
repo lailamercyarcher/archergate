@@ -132,6 +132,9 @@ class StudioHandler(PreviewHandler):
                 self.json_response(200, [{key: row[key] for key in keys} for row in rows], send_body)
             elif route == "/api/timelines":
                 self.json_response(200, timeline.list_timelines(self.library), send_body)
+            elif route == "/api/timeline/parent":
+                self.json_response(200, {"parent_id": timeline.parent_revision(self.library, params.get("id", [""])[0])},
+                                   send_body)
             elif route == "/api/memory":
                 self.json_response(200, memory.records(self.library), send_body)
             elif route == "/api/speech":
@@ -195,6 +198,16 @@ class StudioHandler(PreviewHandler):
                             "Source insertion requires base_id, asset_id, track_id, source_start, duration, at and revision_id."
                         )
                     data = operations.insert_source_range(self.library, **body)
+                case "/api/timeline/trim":
+                    if not self.token:
+                        self.send_error(403)
+                        return
+                    fields = {"base_id", "clip_id", "edge", "amount", "revision_id"}
+                    if body.keys() != fields:
+                        raise ExperimentError(
+                            "Clip trim requires base_id, clip_id, edge, amount and revision_id."
+                        )
+                    data = operations.trim_clip(self.library, **body)
                 case "/api/preview":
                     data = {"key": preview.render(self.library, body.get("name"))}
                 case "/api/inspect":
@@ -232,6 +245,8 @@ def serve(library, port, *, open_browser=False, desktop=False):
                       media_lock=Lock() if desktop else None)
     with ThreadingHTTPServer(("127.0.0.1", port), handler) as server:
         if desktop:
+            server.daemon_threads = False
+
             def stop_on_parent_exit():
                 sys.stdin.buffer.read(1)
                 server.shutdown()

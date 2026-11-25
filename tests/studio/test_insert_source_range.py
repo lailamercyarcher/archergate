@@ -141,6 +141,58 @@ class InsertSourceRangeTests(unittest.TestCase):
         self.assertEqual(self.stored_timeline("base"), original_bytes)
         self.assert_sources_unchanged()
 
+    def test_one_frame_trim_commits_parented_revision_and_renders_changed_cut(self):
+        picture_result = self.insert(revision_id="trim-source-picture")
+        audiovisual = operations.insert_source_range(
+            self.library, "trim-source-picture", self.music["id"], "sound",
+            source_start=0, duration=24, at=24, revision_id="trim-source-av",
+        )
+        self.assertTrue(audiovisual["valid"])
+        before = self.stored_timeline("trim-source-av")
+        manifest = timeline.load(self.library, "trim-source-av")
+        inserted = next(clip for clip in manifest["tracks"][0]["clips"] if clip["at"] == 24)
+
+        trimmed = operations.trim_clip(
+            self.library, "trim-source-av", inserted["id"], "out", 1, "trimmed-source-av",
+        )
+        self.assertTrue(trimmed["valid"])
+        self.assertEqual(timeline.parent_revision(self.library, "trimmed-source-av"), "trim-source-av")
+        self.assertEqual(self.stored_timeline("trim-source-av"), before)
+        clips = timeline.load(self.library, "trimmed-source-av")["tracks"][0]["clips"]
+        changed = next(clip for clip in clips if clip["id"] == inserted["id"])
+        self.assertEqual((changed["at"], changed["source_start"], changed["duration"]), (24, 24, 23))
+
+        original_key = preview.render(self.library, "trim-source-av")
+        trimmed_key = preview.render(self.library, "trimmed-source-av")
+        original = self.library.path("previews", original_key + ".mp4")
+        rendered = self.library.path("previews", trimmed_key + ".mp4")
+
+        def final_frame(path):
+            return ffmpeg(*input_args(path), "-vf", r"select=eq(n\,47),scale=1:1,format=gray",
+                          "-fps_mode", "vfr", "-frames:v", "1", "-f", "rawvideo", "-")
+
+        self.assertGreater(final_frame(original)[0], 210)
+        self.assertLess(final_frame(rendered)[0], 40)
+        ffmpeg(*input_args(rendered), "-map", "0", "-f", "null", "-")
+        self.assert_sources_unchanged()
+
+    def test_invalid_trim_does_not_create_revision(self):
+        original = self.stored_timeline("base")
+        cases = [
+            ("missing-clip", "out", 1, "Unknown clip"),
+            ("picture-before", "side", 1, "trim the clip in-point or out-point"),
+            ("picture-before", "out", 24, "leave at least one frame"),
+            ("picture-before", "out", 0, "integer tick count"),
+        ]
+        for index, (clip_id, edge, amount, error) in enumerate(cases):
+            with self.subTest(edge=edge, amount=amount):
+                count = self.timeline_count()
+                with self.assertRaisesRegex(ExperimentError, error):
+                    operations.trim_clip(self.library, "base", clip_id, edge, amount, f"invalid-trim-{index}")
+                self.assertEqual(self.stored_timeline("base"), original)
+                self.assertEqual(self.timeline_count(), count)
+        self.assert_sources_unchanged()
+
     def test_duplicate_and_concurrent_submissions_return_one_committed_revision(self):
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda _: self.insert(revision_id="retryable-insert"), range(2)))
@@ -258,6 +310,25 @@ class InsertSourceRangeTests(unittest.TestCase):
                 result = json.loads(response.read())
                 self.assertEqual(response.status, 200)
             self.assertTrue(result["valid"])
+
+            parent_request = Request(
+                f"http://127.0.0.1:{server.server_port}/api/timeline/parent?id=api-insert",
+                headers={"Cookie": f"archergate_session={token.decode()}"},
+            )
+            with urlopen(parent_request) as response:
+                self.assertEqual(json.loads(response.read()), {"parent_id": "base"})
+
+            inserted = timeline.load(self.library, "api-insert")["tracks"][0]["clips"][-1]
+            trim_payload = {
+                "base_id": "api-insert", "clip_id": inserted["id"], "edge": "out", "amount": 1,
+                "revision_id": "api-trim",
+            }
+            trim_request = Request(
+                f"http://127.0.0.1:{server.server_port}/api/timeline/trim",
+                data=json.dumps(trim_payload).encode(), method="POST", headers=headers,
+            )
+            with urlopen(trim_request) as response:
+                self.assertTrue(json.loads(response.read())["valid"])
             self.assertEqual(result["id"], "api-insert")
             self.assertEqual(len(timeline.load(self.library, "api-insert")["tracks"][0]["clips"]), 2)
             self.assertEqual(self.stored_timeline("base"), original_bytes)

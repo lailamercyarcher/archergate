@@ -59,6 +59,13 @@ try {
   await rendered.evaluate(video => { video.currentTime = 1.25; });
   await page.waitForFunction(() => !document.querySelector("#sequence-preview video").seeking);
   const sourceA = await rendered.getAttribute("src");
+  const switcher = page.locator("#sequence-preview .preview-switcher");
+  const decisions = page.locator("#sequence-preview .preview-decisions");
+  const switcherBox = await switcher.boundingBox();
+  const decisionsBox = await decisions.boundingBox();
+  assert.ok(switcherBox && decisionsBox);
+  assert.ok(switcherBox.x + switcherBox.width <= decisionsBox.x ||
+    decisionsBox.x + decisionsBox.width <= switcherBox.x, "A/B controls must have separate pointer targets");
   await page.getByRole("button", {name: "show b"}).click();
   await page.waitForFunction(() => {
     const video = document.querySelector("#sequence-preview video");
@@ -68,8 +75,10 @@ try {
   await page.getByRole("button", {name: "show a"}).click();
   assert.equal(await rendered.getAttribute("src"), sourceA);
   await page.getByRole("button", {name: "show b"}).click();
+  await page.getByRole("button", {name: "accept b"}).click();
+  await page.getByRole("status").getByText("revision accepted", {exact: true}).waitFor();
   await page.getByRole("button", {name: "reject b"}).click();
-  await page.getByText("revision rejected", {exact: true}).waitFor();
+  await page.getByRole("status").getByText("revision rejected", {exact: true}).waitFor();
   assert.equal(await rendered.getAttribute("src"), sourceA);
   await page.getByText("timeline data", {exact: true}).click();
   await page.getByRole("button", {name: "review edit"}).click();

@@ -135,6 +135,42 @@ def insert_source_range(library, base_id, asset_id, track_id, source_start, dura
     )
 
 
+def trim_clip(library, base_id, clip_id, edge, amount, revision_id):
+    from . import timeline
+
+    source = timeline.load(library, base_id)
+    parent_sha256 = timeline.digest(source)
+    draft = deepcopy(source)
+    timeline.schema(source)
+    revision_id = identifier(revision_id)
+    if revision_id == base_id:
+        raise ExperimentError("Choose a new revision ID distinct from the source timeline.")
+    clip_id = identifier(clip_id)
+    if edge not in ("in", "out"):
+        raise ExperimentError("Choose whether to trim the clip in-point or out-point.")
+    amount = timeline.tick(amount, "Trim amount", minimum=1)
+    clip = next(
+        (clip for track in draft["tracks"] for clip in track["clips"] if clip["id"] == clip_id),
+        None,
+    )
+    if clip is None:
+        raise ExperimentError(f"Unknown clip {clip_id} in timeline {base_id}.")
+    if amount >= clip["duration"]:
+        raise ExperimentError("A trim must leave at least one frame in the clip.")
+    if edge == "in":
+        clip["at"] += amount
+        clip["source_start"] += amount
+    clip["duration"] -= amount
+    suffix = f" / trim {edge}"
+    draft["id"] = revision_id
+    draft["title"] = source["title"][:250 - len(suffix)] + suffix
+    return timeline.commit_revision(
+        library, draft, parent_id=base_id, parent_sha256=parent_sha256,
+        operation="trim_clip",
+        payload={"clip_id": clip_id, "edge": edge, "amount": amount, "revision_id": revision_id},
+    )
+
+
 def transform_filter(points, base, fps, width, height):
     def expression(field):
         result = str(points[-1][field])

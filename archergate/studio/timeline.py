@@ -239,6 +239,13 @@ def load(library, name):
     return json.loads(row[0])
 
 
+def parent_revision(library, name):
+    identifier(name)
+    with library.connect() as db:
+        row = db.execute("SELECT parent_id FROM timeline_commands WHERE revision_id = ?", (name,)).fetchone()
+    return row[0] if row else None
+
+
 def list_timelines(library):
     with library.connect() as db:
         return [json.loads(row[0]) for row in db.execute("SELECT details FROM timelines ORDER BY id LIMIT 250")]

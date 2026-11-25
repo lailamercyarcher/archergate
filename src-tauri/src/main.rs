@@ -52,11 +52,6 @@ fn workspace(state: tauri::State<'_, Session>) -> PathBuf {
 }
 
 #[tauri::command]
-fn close_workspace(app: tauri::AppHandle) {
-    app.exit(0);
-}
-
-#[tauri::command]
 async fn choose_workspace(app: tauri::AppHandle) -> Result<(), String> {
     let chosen = tauri::async_runtime::spawn_blocking({
         let app = app.clone();
@@ -160,11 +155,6 @@ fn start(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let window_copy = window.clone();
     window.on_window_event(move |event| {
-        if let WindowEvent::CloseRequested { api, .. } = event {
-            if window_copy.eval("window.dispatchEvent(new Event('archer-close'))").is_ok() {
-                api.prevent_close();
-            }
-        }
         if let WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
             let media: Vec<&Path> = paths.iter().map(PathBuf::as_path).filter(|path|
                 path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext|
@@ -186,7 +176,7 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![pick_media, workspace, choose_workspace, close_workspace])
+        .invoke_handler(tauri::generate_handler![pick_media, workspace, choose_workspace])
         .setup(|app| {
             if let Err(error) = start(app) {
                 if let Some(state) = app.try_state::<Session>() { stop_backend(&state); }

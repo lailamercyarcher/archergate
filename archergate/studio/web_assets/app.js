@@ -3,6 +3,10 @@ const assets = new Map();
 let edits = [];
 let pendingPaths = [];
 let busy = 0;
+let sourceRange = null;
+let refreshSourceRange = () => {};
+let lastTimelineId = null;
+let pendingRevisionCommand = null;
 const invoke = window.__TAURI__?.core?.invoke;
 const initialPreview = $("#preview-empty").cloneNode(true);
 
@@ -106,6 +110,58 @@ function number(value) {
   return Number(numerator) / Number(denominator);
 }
 
+function fraction(value) {
+  const [numerator, denominator = "1"] = String(value).split("/");
+  return [BigInt(numerator), BigInt(denominator)];
+}
+
+function floorDiv(numerator, denominator) {
+  return numerator >= 0n ? numerator / denominator : -((-numerator + denominator - 1n) / denominator);
+}
+
+function ceilDiv(numerator, denominator) {
+  return -floorDiv(-numerator, denominator);
+}
+
+function sourceRate(asset) {
+  const candidate = asset.source.streams.video?.avg_frame_rate;
+  const match = candidate?.match(/^([1-9][0-9]*)\/(1|1001)$/);
+  const fps = match && number(candidate) <= 240 ? candidate : "24/1";
+  const [frames, denominator] = fraction(fps);
+  return {fps, timebase: `${denominator}/${frames}`};
+}
+
+function microsToTicks(micros, timebase) {
+  const [numerator, denominator] = fraction(timebase);
+  const scaled = BigInt(micros) * denominator;
+  const divisor = 1_000_000n * numerator;
+  return Number((2n * scaled + divisor) / (2n * divisor));
+}
+
+function timecode(ticks, timebase, fps) {
+  const [baseNumerator, baseDenominator] = fraction(timebase);
+  const [fpsNumerator, fpsDenominator] = fraction(fps);
+  const frameNumerator = BigInt(ticks) * baseNumerator * fpsNumerator;
+  const frameDenominator = baseDenominator * fpsDenominator;
+  if (frameNumerator % frameDenominator) return `${ticks} ticks`;
+  const frame = frameNumerator / frameDenominator;
+  const nominal = Number((fpsNumerator * 2n + fpsDenominator) / (2n * fpsDenominator));
+  const frames = frame % BigInt(nominal);
+  const totalSeconds = frame / BigInt(nominal);
+  const hours = totalSeconds / 3600n;
+  const minutes = totalSeconds / 60n % 60n;
+  const secondsPart = totalSeconds % 60n;
+  return [hours, minutes, secondsPart, frames].map(value => value.toString().padStart(2, "0")).join(":");
+}
+
+function revisionId(command) {
+  const key = JSON.stringify(command);
+  if (pendingRevisionCommand?.key !== key) {
+    pendingRevisionCommand = {key, id: `rev-${crypto.randomUUID().replaceAll("-", "")}`};
+  }
+  return pendingRevisionCommand.id;
+}
+
 const seconds = value => `${Number(value).toFixed(2)} s`;
 const fields = form => Object.fromEntries(new FormData(form));
 
@@ -138,6 +194,54 @@ async function refreshAssets(query = "") {
   select.value = selected;
 }
 
+function sourceRangePanel(asset, player) {
+  if (sourceRange?.assetId !== asset.id) sourceRange = {assetId: asset.id, inMicros: null, outMicros: null};
+  const panel = node("section", undefined, "source-range");
+  panel.setAttribute("aria-label", "source range");
+  panel.append(node("h4", "source range"));
+  const summary = node("p", "Mark in and out at the source monitor playhead.");
+  const actions = node("div", undefined, "row");
+  const mark = (edge, label) => button(label, () => {
+    if (!Number.isFinite(player.currentTime) || player.currentTime < 0) {
+      throw new Error("Wait for the source proxy to load before marking a range.");
+    }
+    sourceRange[edge] = Math.round(player.currentTime * 1_000_000);
+    update();
+  });
+  const markIn = mark("inMicros", "mark in at playhead");
+  const markOut = mark("outMicros", "mark out at playhead");
+  const clear = button("clear range", () => {
+    sourceRange.inMicros = null;
+    sourceRange.outMicros = null;
+    update();
+  });
+  const insert = button("insert selected range into sequence", () => insertSelectedRange(asset));
+  actions.append(markIn, markOut, clear, insert);
+  panel.append(summary, actions);
+
+  function update() {
+    const edit = edits.find(row => row.id === $("#edit").value);
+    const rate = edit || sourceRate(asset);
+    const inTick = sourceRange.inMicros === null ? null : microsToTicks(sourceRange.inMicros, rate.timebase);
+    const outTick = sourceRange.outMicros === null ? null : microsToTicks(sourceRange.outMicros, rate.timebase);
+    const valid = inTick !== null && outTick !== null && outTick > inTick;
+    const details = [];
+    if (inTick !== null) details.push(`In ${timecode(inTick, rate.timebase, rate.fps)}`);
+    if (outTick !== null) details.push(`Out ${timecode(outTick, rate.timebase, rate.fps)}`);
+    if (valid) details.push(`Duration ${timecode(outTick - inTick, rate.timebase, rate.fps)} (${outTick - inTick} ticks)`);
+    summary.textContent = details.length ? details.join(" · ") : "Mark in and out at the source monitor playhead.";
+    if (sourceRange.inMicros !== null && sourceRange.outMicros !== null && !valid) {
+      summary.textContent += " · Out must follow in by at least one frame.";
+    }
+    insert.disabled = !invoke || !edit || !valid;
+    insert.title = !invoke ? "Insert from the ArcherGate desktop application." : "";
+  }
+
+  refreshSourceRange = update;
+  update();
+  return panel;
+}
+
 async function showAsset(id, position) {
   const asset = await api(`/api/asset/${id}`);
   const view = $("#asset-details");
@@ -158,6 +262,7 @@ async function showAsset(id, position) {
     node("p", `${asset.provenance} · ${asset.rights}`, "details"),
     node("p", `SHA-256 ${asset.sha256}`, "details"));
   view.append(button("start sequence", () => makeDraft(asset)));
+  view.append(sourceRangePanel(asset, player));
   if (asset.source.streams.audio && (await api("/api/speech")).installed) {
     view.append(button("transcribe english", async () => {
       $("#status").textContent = "transcribing locally…";
@@ -201,21 +306,26 @@ async function showAsset(id, position) {
 }
 
 async function makeDraft(asset) {
-  const candidate = asset.source.streams.video?.avg_frame_rate;
-  const fraction = candidate?.match(/^([1-9][0-9]*)\/(1|1001)$/);
-  const fps = fraction && number(candidate) <= 240 ? candidate : "24/1";
-  const [frames, denominator] = fps.split("/");
-  const rate = number(fps);
-  const tracks = Object.entries(asset.source.streams).flatMap(([kind, stream]) => {
-    const at = Math.max(0, Math.ceil(number(stream.start) * rate - 1e-7));
-    const end = Math.floor((number(stream.start) + number(stream.duration)) * rate + 1e-7);
-    return end > at ? [{id: kind, kind, clips: [{
-      id: `source-${kind}`, asset: asset.id, at, source_start: at, duration: end - at, sync: "source",
-    }]}] : [];
+  const {fps, timebase} = sourceRate(asset);
+  const [fpsNumerator, fpsDenominator] = fraction(fps);
+  const tracks = ["video", "audio"].map(kind => {
+    const stream = asset.source.streams[kind];
+    if (!stream) return {id: kind, kind, clips: []};
+    const [startNumerator, startDenominator] = fraction(stream.start);
+    const [durationNumerator, durationDenominator] = fraction(stream.duration);
+    const start = ceilDiv(startNumerator * fpsNumerator, startDenominator * fpsDenominator);
+    const endNumerator = (startNumerator * durationDenominator + durationNumerator * startDenominator) * fpsNumerator;
+    const endDenominator = startDenominator * durationDenominator * fpsDenominator;
+    const at = Math.max(0, Number(start));
+    const end = Number(floorDiv(endNumerator, endDenominator));
+    return {
+      id: kind, kind,
+      clips: end > at ? [{id: `source-${kind}`, asset: asset.id, at, source_start: at, duration: end - at, sync: "source"}] : [],
+    };
   });
-  if (!tracks.length) throw new Error("The source is shorter than one timeline frame.");
+  if (!tracks.some(track => track.clips.length)) throw new Error("The source is shorter than one timeline frame.");
   const draft = {
-    version: 2, id: `edit-${Date.now()}`, title: asset.name, timebase: `${denominator}/${frames}`, fps, tracks,
+    version: 2, id: `edit-${crypto.randomUUID().replaceAll("-", "")}`, title: asset.name, timebase, fps, tracks,
   };
   // Validate and save through the real timeline service, never fabricate a preview.
   const saved = await api("/api/timelines", draft);
@@ -244,7 +354,7 @@ async function showSequence(names, editorial = null) {
   player.addEventListener("timeupdate", updateClock);
   player.addEventListener("loadedmetadata", updateClock);
   player.setAttribute("aria-label", "Composed sequence preview");
-  const controls = node("div", undefined, "row");
+  const controls = node("div", undefined, "row preview-switcher");
   const download = node("a", "download mp4");
   let selected = 0;
   let cue = 0;
@@ -272,7 +382,7 @@ async function showSequence(names, editorial = null) {
       button(`show ${name.toLowerCase()}`, () => { if (index !== selected) activate(index); })));
   }
   activate(0, false);
-  const decisions = node("div", undefined, "row");
+  const decisions = node("div", undefined, "row preview-decisions");
   decisions.append(download);
   if (keys.length > 1) {
     async function recordDecision(decision) {
@@ -329,12 +439,80 @@ function showTimeline(edit, changed = new Set()) {
           await showAsset(clip.asset, clip.source_start * base);
         });
       if (changed.has(clip.id)) cue.classList.add("accent");
-      lane.append(cue);
+      const entry = node("div", undefined, "clip-entry");
+      const trimIn = button("trim in 1 frame", () => trimClip(edit, clip, "in"));
+      const trimOut = button("trim out 1 frame", () => trimClip(edit, clip, "out"));
+      trimIn.disabled = trimOut.disabled = !invoke;
+      entry.append(cue, trimIn, trimOut);
+      lane.append(entry);
       last = end;
     }
     view.append(lane);
   }
   return view;
+}
+
+async function insertSelectedRange(asset) {
+  const edit = edits.find(row => row.id === $("#edit").value);
+  if (!edit) throw new Error("Start or select a sequence before inserting footage.");
+  if (!sourceRange || sourceRange.assetId !== asset.id ||
+      sourceRange.inMicros === null || sourceRange.outMicros === null) {
+    throw new Error("Mark both source in and out points first.");
+  }
+  const sourceStart = microsToTicks(sourceRange.inMicros, edit.timebase);
+  const sourceEnd = microsToTicks(sourceRange.outMicros, edit.timebase);
+  const duration = sourceEnd - sourceStart;
+  if (duration < 1) throw new Error("The selected source range must be at least one frame.");
+  const at = Number($("#playhead-tick").value);
+  if (!Number.isSafeInteger(at) || at < 0) throw new Error("Playhead must be a non-negative integer tick.");
+  const trackId = $("#destination-track").value;
+  const command = {
+    base_id: edit.id, asset_id: asset.id, track_id: trackId,
+    source_start: sourceStart, duration, at,
+  };
+  const result = await api("/api/timeline/insert", {...command, revision_id: revisionId(command)});
+  pendingRevisionCommand = null;
+  await refreshEdits(result.id);
+  navigateTo("timelines");
+  await showSequence([result.id]);
+  $("#status").textContent = `Inserted ${duration} ticks at tick ${at}. Saved as ${result.id}.`;
+}
+
+async function trimClip(edit, clip, edge) {
+  const [baseNumerator, baseDenominator] = fraction(edit.timebase);
+  const [fpsNumerator, fpsDenominator] = fraction(edit.fps);
+  const ticksNumerator = baseDenominator * fpsDenominator;
+  const ticksDenominator = baseNumerator * fpsNumerator;
+  if (ticksNumerator % ticksDenominator) {
+    throw new Error("A single frame cannot be represented by this sequence timebase.");
+  }
+  const command = {base_id: edit.id, clip_id: clip.id, edge, amount: Number(ticksNumerator / ticksDenominator)};
+  const result = await api("/api/timeline/trim", {...command, revision_id: revisionId(command)});
+  pendingRevisionCommand = null;
+  await refreshEdits(result.id);
+  navigateTo("timelines");
+  await showSequence([result.id]);
+  $("#status").textContent = `Trimmed ${edge}-point by one frame. Saved as ${result.id}.`;
+}
+
+async function updateRevisionControls(edit) {
+  const control = $("#undo-edit");
+  control.hidden = true;
+  control.disabled = true;
+  control.dataset.parent = "";
+  if (!edit) return;
+  const result = await api(`/api/timeline/parent?id=${encodeURIComponent(edit.id)}`);
+  if ($("#edit").value !== edit.id) return;
+  control.dataset.parent = result.parent_id || "";
+  control.hidden = !result.parent_id;
+  control.disabled = !result.parent_id;
+}
+
+function updatePlayheadDisplay(edit) {
+  const ticks = Number($("#playhead-tick").value);
+  $("#playhead-timecode").textContent = edit && Number.isSafeInteger(ticks) && ticks >= 0
+    ? `${timecode(ticks, edit.timebase, edit.fps)} · ${seconds(ticks * number(edit.timebase))}`
+    : "--";
 }
 
 function selectEdit() {
@@ -348,6 +526,25 @@ function selectEdit() {
   renderEmptyPreview(edit);
   document.body.classList.toggle("no-sequence", !edit);
   if (!edit) $("#edit-details").append(node("p", "No clips", "timeline-empty"));
+  $("#timeline-tools").hidden = !edit;
+  if (edit) {
+    const trackSelect = $("#destination-track");
+    const oldTrack = trackSelect.value;
+    trackSelect.replaceChildren(...edit.tracks.map(track =>
+      new Option(`${track.id} · ${track.kind}`, track.id)));
+    if (edit.tracks.some(track => track.id === oldTrack)) trackSelect.value = oldTrack;
+    const end = Math.max(0, ...edit.tracks.flatMap(track => track.clips.map(clip => clip.at + clip.duration)));
+    const playhead = $("#playhead-tick");
+    if (lastTimelineId !== edit.id) playhead.value = end;
+    else playhead.value = Math.min(end, Math.max(0, Number(playhead.value) || 0));
+    lastTimelineId = edit.id;
+    updatePlayheadDisplay(edit);
+    localStorage.setItem("archergate.activeTimeline", edit.id);
+    refreshSourceRange();
+    updateRevisionControls(edit).catch(error => { $("#status").textContent = error.message; });
+  } else {
+    lastTimelineId = null;
+  }
   for (const id of ["#preview-edit", "#export"]) $(id).hidden = !edit;
   for (const id of ["#preview-compare", "#compare"]) $(id).hidden = edits.length < 2;
   $("#review").replaceChildren();
@@ -358,7 +555,8 @@ async function refreshEdits(selected) {
   for (const id of ["#edit", "#alternative"]) {
     $(id).replaceChildren(...edits.map(edit => new Option(edit.title, edit.id)));
   }
-  if (selected) $("#edit").value = selected;
+  const desired = selected || localStorage.getItem("archergate.activeTimeline");
+  if (desired && edits.some(edit => edit.id === desired)) $("#edit").value = desired;
   $("#alternative").selectedIndex = Math.min(1, edits.length - 1);
   selectEdit();
 }
@@ -534,6 +732,16 @@ $("#preview-edit").addEventListener("click", action(() => showSequence([$("#edit
 $("#preview-compare").addEventListener("click", action(() => showSequence([$("#edit").value, $("#alternative").value])));
 $("#search").addEventListener("submit", action(event => refreshAssets(fields(event.target).q)));
 $("#edit").addEventListener("change", selectEdit);
+$("#playhead-tick").addEventListener("input", () =>
+  updatePlayheadDisplay(edits.find(row => row.id === $("#edit").value)));
+$("#undo-edit").addEventListener("click", action(async () => {
+  const parent = $("#undo-edit").dataset.parent;
+  if (!parent) throw new Error("This revision has no saved parent.");
+  await refreshEdits(parent);
+  navigateTo("timelines");
+  await showSequence([parent]);
+  $("#status").textContent = `Reverted to saved parent revision ${parent}.`;
+}));
 $("#compare").addEventListener("click", action(async () => {
   const data = await api("/api/compare", {left: $("#edit").value, right: $("#alternative").value});
   const changed = new Set(data.changes.map(row => row.clip));
@@ -578,10 +786,6 @@ action(async () => {
 })();
 
 if (invoke) action(async () => {
-  window.addEventListener("archer-close", action(async () => {
-    if (busy) throw new Error("Wait for the active media job to finish before closing.");
-    await invoke("close_workspace");
-  }));
   $("#desktop-controls").hidden = false;
   document.body.classList.add("is-desktop");
   $("#import").elements.path.required = false;

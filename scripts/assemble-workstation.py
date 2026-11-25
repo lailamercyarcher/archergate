@@ -20,7 +20,9 @@ def main():
         if stream.read(2) != b"MZ":
             raise ValueError("The application must be a compiled Windows executable.")
     required = ["python/python.exe", "media-tools/ffmpeg.exe", "media-tools/ffprobe.exe",
-                "speech-tools/whisper-cli.exe", "engine/archergate/studio/web_assets/index.html"]
+                "speech-tools/whisper-cli.exe", "engine/archergate/studio/web_assets/index.html",
+                "engine/archergate/studio/web_assets/IBMPlexSans-Regular.woff2",
+                "engine/archergate/studio/web_assets/IBMPlexSans-SemiBold.woff2"]
     if any(not (PAYLOAD / name).is_file() for name in required):
         raise ValueError("Run scripts/prepare-workstation.py before assembling.")
     root = args.output_dir

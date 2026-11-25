@@ -42,6 +42,12 @@
       </div>
       <div class="timeline-desk">
         <div class="section-rail"><h2>timeline</h2><span id="timeline-help">picture / sound</span></div>
+        <div id="timeline-tools" class="timeline-tools" hidden>
+          <label for="destination-track">destination track</label><select id="destination-track" aria-label="destination track"></select>
+          <label for="playhead-tick">playhead tick</label><input id="playhead-tick" type="number" min="0" max="1000000000000" step="1">
+          <output id="playhead-timecode" aria-live="polite"></output>
+          <button id="undo-edit" type="button" class="quiet-button" hidden>revert to parent revision</button>
+        </div>
         <div id="edit-details" class="edit-details"><p class="timeline-empty">no clips</p></div>
         <details id="edit-manifest" class="technical-drawer"><summary>timeline data</summary>
           <label for="manifest">manifest</label>
