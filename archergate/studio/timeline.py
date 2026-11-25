@@ -1,5 +1,6 @@
 """Version 2 editorial timelines with exact time arithmetic and nonmutating review."""
 
+import hashlib
 import json
 from fractions import Fraction
 
@@ -7,6 +8,14 @@ from archergate.media import ExperimentError, identifier
 
 from .library import user_text
 from .operations import check_effects
+
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def digest(value):
+    return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
 
 def rational(value, field):
@@ -151,6 +160,73 @@ def save(library, manifest):
         cursor = db.execute("INSERT OR IGNORE INTO timelines VALUES (?, ?)", (manifest["id"], json.dumps(manifest)))
         if cursor.rowcount != 1:
             raise ExperimentError("Timeline ID already exists. Give the alternative a new ID.")
+    return result
+
+
+def commit_revision(library, manifest, *, parent_id, parent_sha256, operation, payload):
+    result = inspect(library, manifest)
+    if not result["valid"]:
+        raise ExperimentError("Fix timeline errors before committing a revision.")
+    identifier(parent_id)
+    identifier(manifest["id"])
+    if not isinstance(parent_sha256, str) or len(parent_sha256) != 64:
+        raise ExperimentError("Invalid parent revision fingerprint.")
+    fingerprint = digest({
+        "operation": operation,
+        "parent_id": parent_id,
+        "parent_sha256": parent_sha256,
+        "payload": payload,
+    })
+    revision_sha256 = digest(manifest)
+    assets = {
+        clip["asset"]
+        for track in manifest["tracks"]
+        for clip in track["clips"]
+    }
+
+    def prior_result(db):
+        previous = db.execute("""
+            SELECT operation, fingerprint, parent_id, parent_sha256, revision_sha256, result
+            FROM timeline_commands WHERE revision_id = ?
+        """, (manifest["id"],)).fetchone()
+        if previous is None:
+            return None
+        if previous[:4] != (operation, fingerprint, parent_id, parent_sha256):
+            raise ExperimentError("Revision ID was already used for a different command.")
+        row = db.execute("SELECT details FROM timelines WHERE id = ?", (manifest["id"],)).fetchone()
+        if row is None or digest(json.loads(row[0])) != previous[4]:
+            raise ExperimentError("The stored command revision is missing or has been modified.")
+        return json.loads(previous[5])
+
+    with library.connect() as db:
+        existing = prior_result(db)
+    if existing is not None:
+        return existing
+
+    for asset_id in assets:
+        library.verify_original(library.asset(asset_id))
+
+    with library.connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        existing = prior_result(db)
+        if existing is not None:
+            return existing
+
+        parent = db.execute("SELECT details FROM timelines WHERE id = ?", (parent_id,)).fetchone()
+        if parent is None:
+            raise ExperimentError(f"Unknown parent timeline {parent_id}.")
+        if digest(json.loads(parent[0])) != parent_sha256:
+            raise ExperimentError("The parent revision changed while the command was being prepared.")
+        if db.execute("SELECT 1 FROM timelines WHERE id = ?", (manifest["id"],)).fetchone():
+            raise ExperimentError("Timeline ID already exists. Give the alternative a new ID.")
+
+        db.execute("INSERT INTO timelines VALUES (?, ?)", (manifest["id"], canonical(manifest)))
+        db.execute("""
+            INSERT INTO timeline_commands
+            (revision_id, operation, fingerprint, parent_id, parent_sha256, revision_sha256, result)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (manifest["id"], operation, fingerprint, parent_id, parent_sha256,
+              revision_sha256, canonical(result)))
     return result
 
 

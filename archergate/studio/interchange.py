@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 from fractions import Fraction
 from uuid import uuid4
 
-from archergate.media import ExperimentError, sha256
+from archergate.media import ExperimentError
 
 from . import timeline
 
@@ -86,9 +86,7 @@ def build(library, manifest):
             if asset_id in assets:
                 continue
             asset = library.asset(asset_id)
-            path = library.original(asset)
-            if not path.is_file() or sha256(path) != asset["sha256"]:
-                raise ExperimentError(f"Missing or changed original: {asset['name']}. Restore the registered file.")
+            path = library.verify_original(asset)
             picture = asset["source"]["streams"].get("video")
             if picture and picture["avg_frame_rate"] != picture["r_frame_rate"]:
                 raise ExperimentError(f"{asset['name']} has an ambiguous picture rate. A constant-rate source is required for XML.")

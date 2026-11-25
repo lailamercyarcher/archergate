@@ -6,7 +6,7 @@ from fractions import Fraction
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from archergate.media import ExperimentError, sha256
+from archergate.media import ExperimentError
 
 from . import timeline
 from .operations import transform_filter
@@ -28,9 +28,7 @@ def render(library, name):
         raise ExperimentError("Alpha preview supports up to ten minutes and 48 clips.")
     assets = {clip["asset"]: library.asset(clip["asset"]) for track in manifest["tracks"] for clip in track["clips"]}
     for asset in assets.values():
-        source = library.original(asset)
-        if not source.is_file() or sha256(source) != asset["sha256"]:
-            raise ExperimentError(f"Missing or changed original: {asset['name']}.")
+        library.verify_original(asset)
     key = hashlib.sha256(json.dumps([1, manifest, {k: v["sha256"] for k, v in assets.items()}],
                                   sort_keys=True).encode()).hexdigest()
     library.path("previews").mkdir(exist_ok=True)

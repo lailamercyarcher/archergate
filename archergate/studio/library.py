@@ -183,6 +183,11 @@ class Library:
                 );
                 CREATE TABLE IF NOT EXISTS memory (id TEXT PRIMARY KEY, details TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS timelines (id TEXT PRIMARY KEY, details TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS timeline_commands (
+                    revision_id TEXT PRIMARY KEY, operation TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                    parent_id TEXT NOT NULL, parent_sha256 TEXT NOT NULL,
+                    revision_sha256 TEXT NOT NULL, result TEXT NOT NULL
+                );
             """)
 
     def path(self, *parts):
@@ -222,11 +227,15 @@ class Library:
     def original(self, asset):
         return self.path("media", asset["id"], "original", asset["name"])
 
+    def verify_original(self, asset):
+        path = self.original(asset)
+        if not path.is_file() or sha256(path) != asset["sha256"]:
+            raise ExperimentError(f"Missing or changed original: {asset['name']}.")
+        return path
+
     def transcribe(self, asset_id, backend, model):
         asset = self.asset(asset_id)
-        original = self.original(asset)
-        if not original.is_file() or sha256(original) != asset["sha256"]:
-            raise ExperimentError(f"Missing or changed original: {asset['name']}.")
+        original = self.verify_original(asset)
         with TemporaryDirectory(dir=self.root) as analysis:
             result = transcript(original, asset["source"]["streams"].get("audio"), Path(analysis), backend, model)
         asset["transcript"] = result

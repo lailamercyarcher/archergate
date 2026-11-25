@@ -47,7 +47,9 @@ def apply(library, base_id, proposal):
 
     if not isinstance(proposal, dict) or set(proposal) != {"id", "title", "operations"}:
         raise ExperimentError("A proposal needs id, title and operations.")
-    draft = deepcopy(timeline.load(library, base_id))
+    source = timeline.load(library, base_id)
+    parent_sha256 = timeline.digest(source)
+    draft = deepcopy(source)
     draft.update(version=3, id=identifier(proposal["id"]), title=user_text(proposal["title"], "Revision title", 250))
     ops = proposal["operations"]
     if not isinstance(ops, list) or not 1 <= len(ops) <= 48:
@@ -64,13 +66,17 @@ def apply(library, base_id, proposal):
         kind, clip = clips[name]
         check_effects(kind, clip["duration"], op["effects"])
         clip["effects"] = op["effects"]
-    return timeline.save(library, draft)
+    return timeline.commit_revision(
+        library, draft, parent_id=base_id, parent_sha256=parent_sha256,
+        operation="apply_effects", payload=proposal,
+    )
 
 
 def insert_source_range(library, base_id, asset_id, track_id, source_start, duration, at, revision_id):
     from . import timeline
 
     source = timeline.load(library, base_id)
+    parent_sha256 = timeline.digest(source)
     draft = deepcopy(source)
     base, _ = timeline.schema(source)
     revision_id = identifier(revision_id)
@@ -119,7 +125,14 @@ def insert_source_range(library, base_id, asset_id, track_id, source_start, dura
     suffix = " / insert"
     draft["id"] = revision_id
     draft["title"] = source["title"][:250 - len(suffix)] + suffix
-    return timeline.save(library, draft)
+    return timeline.commit_revision(
+        library, draft, parent_id=base_id, parent_sha256=parent_sha256,
+        operation="insert_source_range",
+        payload={
+            "asset_id": asset_id, "track_id": track_id, "source_start": source_start,
+            "duration": duration, "at": at, "revision_id": revision_id,
+        },
+    )
 
 
 def transform_filter(points, base, fps, width, height):

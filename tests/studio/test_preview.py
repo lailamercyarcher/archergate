@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from archergate.media import sha256
+from archergate.media import ExperimentError, sha256
 from archergate.studio import fixtures, preview, timeline
 from archergate.studio.library import Library, ffmpeg, input_args, probe
 
@@ -67,3 +67,30 @@ class PreviewTests(unittest.TestCase):
             with self.assertRaisesRegex(ExperimentError, "Unsupported"):
                 operations.apply(library, "base", proposal)
             self.assertEqual(sha256(source), asset["sha256"])
+
+    def test_effect_revision_retry_is_idempotent(self):
+        from archergate.studio import operations
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "Synthetic moving pattern.mp4"
+            ffmpeg("-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=2",
+                   "-c:v", "libx264", "-pix_fmt", "yuv420p", source)
+            library = Library(root / "work")
+            asset = library.import_media(source, "Synthetic", "Generated locally")
+            base = {"id": "base", "title": "Base", "version": 2, "timebase": "1/24", "fps": "24",
+                    "tracks": [{"id": "video", "kind": "video", "clips": [
+                        {"id": "picture", "asset": asset["id"], "at": 0, "source_start": 0, "duration": 48}]}]}
+            timeline.save(library, base)
+            proposal = {"id": "push-in", "title": "Push in", "operations": [{
+                "clip": "picture", "effects": {"transform": [
+                    {"tick": 0, "scale": 1, "x": 0.5, "y": 0.5, "ease": "smoothstep"},
+                    {"tick": 48, "scale": 1.4, "x": 0.2, "y": 0.5, "ease": "linear"},
+                ]}}]}
+
+            first = operations.apply(library, "base", proposal)
+            retry = operations.apply(library, "base", proposal)
+            self.assertEqual(first, retry)
+            self.assertEqual(timeline.load(library, "base"), base)
+            with self.assertRaisesRegex(ExperimentError, "different command"):
+                operations.apply(library, "base", {**proposal, "title": "Different edit"})

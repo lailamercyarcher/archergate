@@ -1,6 +1,7 @@
 import json
 import struct
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from functools import partial
 from http.server import ThreadingHTTPServer
@@ -9,6 +10,7 @@ from tempfile import TemporaryDirectory
 from threading import Lock, Thread
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from unittest.mock import patch
 
 from archergate.media import ExperimentError, sha256
 from archergate.studio import operations, preview, timeline
@@ -138,6 +140,67 @@ class InsertSourceRangeTests(unittest.TestCase):
         self.assertEqual([(clip["at"], clip["duration"]) for clip in sound_clips], [(0, 24), (48, 12)])
         self.assertEqual(self.stored_timeline("base"), original_bytes)
         self.assert_sources_unchanged()
+
+    def test_duplicate_and_concurrent_submissions_return_one_committed_revision(self):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: self.insert(revision_id="retryable-insert"), range(2)))
+
+        self.assertEqual(results[0], results[1])
+        manifest = timeline.load(self.library, "retryable-insert")
+        self.assertEqual(len(manifest["tracks"][0]["clips"]), 2)
+        with self.library.connect() as db:
+            rows = db.execute(
+                "SELECT count(*) FROM timeline_commands WHERE revision_id = ?",
+                ("retryable-insert",),
+            ).fetchone()[0]
+        self.assertEqual(rows, 1)
+
+        original = self.library.original(self.picture)
+        original_bytes = original.read_bytes()
+        try:
+            original.write_bytes(original_bytes + b"changed after commit")
+            self.assertEqual(self.insert(revision_id="retryable-insert"), results[0])
+        finally:
+            original.write_bytes(original_bytes)
+
+        with self.assertRaisesRegex(ExperimentError, "different command"):
+            self.insert(source_start=36, revision_id="retryable-insert")
+        self.assertEqual(len(timeline.load(self.library, "retryable-insert")["tracks"][0]["clips"]), 2)
+
+    def test_changed_original_rejects_revision_without_changing_parent(self):
+        original = self.library.original(self.picture)
+        original_bytes = original.read_bytes()
+        before = self.stored_timeline("base")
+        try:
+            original.write_bytes(original_bytes + b"changed")
+            with self.assertRaisesRegex(ExperimentError, "Missing or changed original"):
+                self.insert(revision_id="changed-source-insert")
+            self.assertEqual(self.stored_timeline("base"), before)
+            self.assertNotIn("changed-source-insert", [row["id"] for row in timeline.list_timelines(self.library)])
+        finally:
+            original.write_bytes(original_bytes)
+        self.assert_sources_unchanged()
+
+    def test_parent_change_before_commit_rejects_stale_command(self):
+        stored = self.stored_timeline("base").decode("utf-8")
+        original_commit = timeline.commit_revision
+
+        def mutate_parent_then_commit(library, manifest, **kwargs):
+            changed = json.loads(stored)
+            changed["title"] = "Concurrent parent revision"
+            with library.connect() as db:
+                db.execute("UPDATE timelines SET details = ? WHERE id = ?", (json.dumps(changed), "base"))
+            return original_commit(library, manifest, **kwargs)
+
+        try:
+            with patch.object(timeline, "commit_revision", side_effect=mutate_parent_then_commit):
+                with self.assertRaisesRegex(ExperimentError, "parent revision changed"):
+                    self.insert(revision_id="stale-parent-insert")
+            self.assertNotIn("stale-parent-insert", [row["id"] for row in timeline.list_timelines(self.library)])
+        finally:
+            with self.library.connect() as db:
+                db.execute("UPDATE timelines SET details = ? WHERE id = ?", (stored, "base"))
+        self.assertEqual(self.stored_timeline("base"), stored.encode("utf-8"))
 
     def test_rejected_operations_leave_original_revision_unchanged(self):
         original_bytes = self.stored_timeline("base")
