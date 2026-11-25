@@ -3,86 +3,126 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ArcherGate Media Lab</title>
+  <meta name="theme-color" content="#151714">
+  <title>archergate</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
-<main>
-  <header class="masthead"><h1>ArcherGate <span>Media Lab</span></h1><nav aria-label="Workspace"><a href="#timelines">Work</a><a href="#media">Materials</a><a href="#direction">Lab</a></nav></header>
-  <div class="row" id="desktop-controls" hidden><span id="workspace-path"></span><button id="choose-workspace" type="button">Open workspace</button></div>
-  <p id="status" role="status"></p>
-  <section id="media">
-    <h2>Materials</h2>
-    <form id="import" class="row">
-      <label>Local file path<input name="path" required placeholder="MP4, MOV, WAV or MP3"></label>
-      <button type="button" id="pick-media" hidden>Choose files</button>
-      <label>Provenance<input name="provenance" required></label>
-      <label>Rights note<input name="rights" required></label>
-      <label>Proxy<select name="profile"><option value="compact">Compact · 360p</option><option value="standard">Standard · 540p</option></select></label>
-      <button>Import media</button>
-    </form>
-    <form id="search" class="row"><label>Search assets<input name="q" type="search"></label><button>Search</button></form>
-    <div class="split">
-      <ul id="assets" class="results" aria-label="Assets"></ul>
-      <article id="asset-details" aria-live="polite"><p>Select an asset to play its proxy.</p></article>
+<main class="app-shell">
+  <header class="masthead">
+    <h1 class="wordmark">archergate</h1>
+    <nav aria-label="workspace" class="primary-nav">
+      <a href="#timelines" data-view="timelines" aria-current="page">work</a>
+      <a href="#media" data-view="media">materials</a>
+      <a href="#direction" data-view="direction">lab</a>
+    </nav>
+    <div id="desktop-controls" class="workspace-controls" hidden>
+      <span id="workspace-path" title="current workspace"></span>
+      <button id="choose-workspace" type="button" class="quiet-button">switch workspace</button>
     </div>
-  </section>
-  <section id="timelines">
-    <h2>Work</h2>
-    <div class="row"><label>Edit<select id="edit"></select></label><label>Compare with<select id="alternative"></select></label>
-    <button id="compare">Compare edits</button><button id="export">Export Premiere XML</button>
-    <button id="preview-edit">Render preview</button><button id="preview-compare">Render A/B</button></div>
-    <div id="sequence-preview" aria-live="polite"></div>
-    <details id="creative-direction" hidden>
-      <summary>Creative direction · Claude</summary>
-      <form id="creative-form">
-        <label>Direction<textarea name="direction" rows="3" maxlength="1400" required></textarea></label>
-        <div class="row">
-          <label>Claude API key<input name="key" type="password" autocomplete="off" required></label>
-          <label>Model<select name="model"><option value="claude-sonnet-5">Claude Sonnet 5</option><option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option></select></label>
+  </header>
+
+  <section id="timelines" class="app-view work-view is-active" aria-labelledby="work-heading">
+    <div class="view-bar work-bar">
+      <div class="sequence-picker"><label for="edit" id="work-heading">sequence</label><select id="edit" aria-label="edit"></select></div>
+      <button id="preview-edit" type="button" class="quiet-button">render &amp; watch</button>
+      <div class="bar-gap"></div>
+      <label class="comparison-control">compare<select id="alternative" aria-label="compare with"></select></label>
+      <button id="preview-compare" type="button" class="quiet-button">a/b preview</button>
+      <button id="compare" type="button" class="quiet-button">differences</button>
+      <button id="export" type="button" class="primary-button compact-primary">export xml</button>
+    </div>
+    <div class="work-body">
+      <div class="screen-frame" aria-label="sequence monitor">
+        <div id="sequence-preview" class="sequence-preview" aria-live="polite">
+          <div class="screen-empty" id="preview-empty"><p>no sequence</p><button type="button" id="empty-import" class="primary-button">import footage</button></div>
         </div>
-        <fieldset>
-          <legend>Optional context to send</legend>
-          <label><input name="frames" type="checkbox"> Up to three still frames</label>
-          <label><input name="dialogue" type="checkbox"> Up to six transcript excerpts</label>
-          <label><input name="memory" type="checkbox"> Up to five Director’s Memory entries</label>
-        </fieldset>
-        <label><input name="send" type="checkbox" required> Send this direction, clip timing, and selected context to Anthropic using my API account.</label>
-        <button>Generate playable revision</button>
-      </form>
-    </details>
-    <div id="edit-details" class="split"></div>
-    <details id="edit-manifest" open><summary>Timeline manifest</summary>
-    <label for="manifest">Timeline JSON</label>
-    <textarea id="manifest" spellcheck="false" rows="12"></textarea>
-    <div class="row"><button id="inspect">Review proposed edit</button><button id="save-edit">Save new edit</button></div>
-    <ul id="review" aria-live="polite"></ul>
-    </details>
-  </section>
-  <section id="direction">
-    <h2>Lab</h2>
-    <div id="speech-tools" class="row" hidden>
-      <span id="speech-status"></span>
-      <button id="speech-download" type="button">Download English model</button>
-    </div>
-    <h3>Director’s Memory</h3>
-    <div class="split">
-      <form id="memory">
-        <input type="hidden" name="id">
-        <label>Category<select name="kind"><option>film</option><option>scene</option><option>music</option><option>aesthetic</option><option>footage</option><option>annotation</option><option>suggestion</option></select></label>
-        <label>Title<input name="title" required></label>
-        <label>Creative direction or notes<textarea name="description" rows="3" required></textarea></label>
-        <label>Reference (title, link or cue)<input name="reference"></label>
-        <label>Timestamp in seconds<input name="timestamp"></label>
-        <label>Local asset<select name="asset"></select></label>
-        <label>Suggestion decision<select name="decision"><option value="">Choose if applicable</option><option>accepted</option><option>rejected</option><option>modified</option></select></label>
-        <label>Modified suggestion<input name="revision"></label>
-        <div class="row"><button>Save record</button><button type="reset">New record</button></div>
-      </form>
-      <ul id="records" class="results" aria-label="Creative records"></ul>
+        <div class="monitor-footer"><span id="preview-indicator">no active sequence</span><span id="monitor-timecode">--:--</span></div>
+      </div>
+      <div class="timeline-desk">
+        <div class="section-rail"><h2>timeline</h2><span id="timeline-help">picture / sound</span></div>
+        <div id="edit-details" class="edit-details"><p class="timeline-empty">no clips</p></div>
+        <details id="edit-manifest" class="technical-drawer"><summary>timeline data</summary>
+          <label for="manifest">manifest</label>
+          <textarea id="manifest" spellcheck="false" rows="10"></textarea>
+          <div class="inline-actions"><button id="inspect" type="button" class="quiet-button">review edit</button><button id="save-edit" type="button" class="quiet-button">save new edit</button></div>
+          <ul id="review" aria-live="polite"></ul>
+        </details>
+      </div>
+      <div id="creative-direction" class="direction-desk">
+        <form id="creative-form" class="direction-form">
+          <label for="direction-intent">direction</label>
+          <textarea id="direction-intent" name="direction" rows="2" maxlength="1400" required placeholder="describe a change to the cut"></textarea>
+          <button type="button" id="request-revision" class="primary-button direction-execute">make revision <span aria-hidden="true">↗</span></button>
+        </form>
+      </div>
     </div>
   </section>
+
+  <section id="media" class="app-view materials-view" aria-labelledby="materials-heading" hidden>
+    <div class="view-bar"><h2 id="materials-heading">materials</h2><span id="asset-count" class="count"></span><div class="bar-gap"></div><button id="open-import" type="button" class="primary-button compact-primary">+ import</button></div>
+    <div class="materials-body">
+      <div class="materials-browser">
+        <div class="library-head"><h3>footage</h3><form id="search" role="search"><label class="sr-only" for="library-query">search footage</label><input id="library-query" name="q" type="search" placeholder="search footage" autocomplete="off"><button type="submit" class="quiet-button">search</button></form></div>
+        <ul id="assets" class="results asset-list" aria-label="assets"></ul>
+      </div>
+      <aside id="asset-details" class="asset-inspector" aria-live="polite"><div class="inspector-empty">select a source</div></aside>
+    </div>
+    <dialog id="import-dialog" class="drawer-dialog" aria-labelledby="import-heading">
+      <div class="drawer-head"><h2 id="import-heading">import footage</h2><button type="button" id="close-import" class="quiet-button">close</button></div>
+      <div id="import-dropzone" class="import-surface" tabindex="0" role="group" aria-label="import footage">
+        <form id="import" class="import-form">
+          <div class="import-select"><button type="button" id="pick-media" class="primary-button" hidden>choose files</button><label id="path-field">file path<input name="path" required autocomplete="off" placeholder="absolute path to mp4, mov, wav or mp3"></label></div>
+          <div id="pending-files" class="pending-files" aria-live="polite"></div>
+          <div class="import-metadata">
+            <label>source / provenance<input name="provenance" required placeholder="who recorded or supplied this?"></label>
+            <label>usage rights<input name="rights" required placeholder="ownership, permission or license"></label>
+            <label>proxy quality<select name="profile"><option value="compact">360p · smaller</option><option value="standard" selected>540p · standard</option></select></label>
+            <button class="primary-button import-submit" type="submit">import selected footage</button>
+          </div>
+        </form>
+      </div>
+    </dialog>
+  </section>
+
+  <section id="direction" class="app-view lab-view" aria-labelledby="lab-heading" hidden>
+    <div class="view-bar lab-bar"><h2 id="lab-heading">lab</h2><span class="bar-subtitle">notes &amp; decisions</span><div class="bar-gap"></div><button id="open-provider-settings" type="button" class="quiet-button">ai permissions</button><button id="new-reference" type="button" class="primary-button compact-primary">+ new note</button></div>
+    <div class="lab-space">
+      <div class="reference-index">
+        <div class="reference-tools"><label class="sr-only" for="memory-query">search notes</label><input id="memory-query" type="search" placeholder="search notes" autocomplete="off"><label class="sr-only" for="memory-filter">filter notes</label><select id="memory-filter" aria-label="filter notes"><option value="">all notes</option><option value="film">film</option><option value="scene">scene</option><option value="music">music</option><option value="aesthetic">aesthetic</option><option value="footage">footage</option><option value="annotation">annotation</option><option value="suggestion">decision</option></select></div>
+        <div class="index-top"><h3>references</h3><span id="record-count">0 notes</span></div>
+        <ul id="records" class="results memory-records" aria-label="creative records"></ul>
+        <div id="records-empty" class="records-empty"><span>no notes yet</span><button type="button" id="empty-new-reference" class="quiet-button">add a note ↗</button></div>
+      </div>
+      <article id="reference-reader" class="reference-reader" aria-live="polite"><div class="reference-empty" aria-hidden="true"></div></article>
+    </div>
+    <details class="lab-footer"><summary>local tools</summary><div id="speech-tools" hidden><span id="speech-status"></span><button id="speech-download" type="button" class="quiet-button">download english speech model</button></div></details>
+    <dialog id="memory-dialog" class="drawer-dialog" aria-labelledby="memory-dialog-title">
+      <div class="drawer-head"><h2 id="memory-dialog-title">new note</h2><button id="close-memory" type="button" class="quiet-button">close</button></div>
+      <form id="memory" class="memory-form"><input type="hidden" name="id">
+        <label>type<select name="kind"><option>film</option><option>scene</option><option>music</option><option>aesthetic</option><option>footage</option><option>annotation</option><option>suggestion</option></select></label>
+        <label>title<input name="title" required maxlength="250" placeholder="untitled note"></label>
+        <label>note<textarea name="description" rows="7" required placeholder=""></textarea></label>
+        <details id="reference-more"><summary>source &amp; time</summary><label>reference<input name="reference" placeholder="film, document, link or cue"></label><label id="memory-timestamp-field">timestamp (seconds)<input name="timestamp" inputmode="decimal" placeholder="00:00"></label><label id="memory-asset-field">linked footage<select name="asset"></select></label></details>
+        <fieldset id="memory-decision-fields" hidden><legend>decision</legend><label>decision<select name="decision"><option value="">select a decision</option><option>accepted</option><option>rejected</option><option>modified</option></select></label><label>modification<input name="revision"></label></fieldset>
+        <div class="drawer-foot"><button type="reset" class="quiet-button">clear</button><button type="submit" class="primary-button">save note</button></div>
+      </form>
+    </dialog>
+  </section>
+
+  <dialog id="provider-dialog" class="drawer-dialog provider-dialog" aria-labelledby="provider-title">
+    <div class="drawer-head"><h2 id="provider-title">ai permission</h2><button id="close-provider" type="button" class="quiet-button">close</button></div>
+    <div class="permission-inner"><p>remote inference requires approval for each request. manual editing remains local.</p>
+      <label>api key<input name="key" form="creative-form" type="password" autocomplete="off" required placeholder="anthropic api key"></label>
+      <label>model<select name="model" form="creative-form"><option value="claude-sonnet-5">claude sonnet 5</option><option value="claude-haiku-4-5-20251001">claude haiku 4.5</option></select></label>
+      <fieldset><legend>include with request</legend><label><input name="frames" form="creative-form" type="checkbox"> up to three frames</label><label><input name="dialogue" form="creative-form" type="checkbox"> up to six transcript excerpts</label><label><input name="memory" form="creative-form" type="checkbox"> up to five notes</label></fieldset>
+      <label class="consent-line"><input name="send" form="creative-form" type="checkbox" required> i authorize this request to anthropic using my api account</label>
+      <p id="provider-error" role="alert"></p>
+      <div class="drawer-foot"><button id="cancel-provider" type="button" class="quiet-button">cancel</button><button id="submit-provider" type="submit" form="creative-form" class="primary-button">send &amp; render</button></div>
+    </div>
+  </dialog>
+  <p id="status" role="status" aria-live="polite"></p>
 </main>
 </body>
 </html>

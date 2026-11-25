@@ -28,6 +28,8 @@ STATIC = {
     "/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css"),
     "/Hauora-Regular.woff2": ("Hauora-Regular.woff2", "font/woff2"),
     "/Hauora-Bold.woff2": ("Hauora-Bold.woff2", "font/woff2"),
+    "/IBMPlexSans-Regular.woff2": ("IBMPlexSans-Regular.woff2", "font/woff2"),
+    "/IBMPlexSans-SemiBold.woff2": ("IBMPlexSans-SemiBold.woff2", "font/woff2"),
 }
 HOST = re.compile(r"(?:127\.0\.0\.1|localhost|[a-z0-9-]+\.app\.github\.dev)(?::[0-9]{1,5})?", re.ASCII)
 MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
