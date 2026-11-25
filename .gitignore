@@ -1,0 +1,8 @@
+.venv/
+.tools/
+node_modules/
+workspace/
+__pycache__/
+*.mp4
+.env
+.env.*

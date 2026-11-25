@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "edit-a",
+  "fps": 24,
+  "cuts": [
+    {"asset": "signal", "start": 0, "end": 48},
+    {"asset": "transit", "start": 12, "end": 60},
+    {"asset": "echo", "start": 24, "end": 72}
+  ]
+}

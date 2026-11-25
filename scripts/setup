@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if [[ "$(uname -sm)" != "Linux x86_64" ]] || ! python3 -c 'import sys; assert sys.version_info[:2] == (3, 14)'; then
+    echo "Setup targets Linux x86-64 and Python 3.14 (verified on Ubuntu 24.04 Codespaces)." >&2
+    exit 1
+fi
+if ! node -e 'process.exit(+process.versions.node.split(".")[0] < 24 ? 1 : 0)'; then
+    echo "Setup requires Node.js 24 or newer." >&2
+    exit 1
+fi
+
+mkdir -p .tools/downloads .tools/browser-libs
+download() {
+    local url="$1" dest="$2" digest="$3"
+    if [[ ! -f "$dest" ]] || ! sha256sum --check --status <<< "$digest  $dest"; then
+        curl --fail --silent --show-error --location --retry 2 --max-time 180 "$url" -o "$dest.part"
+        sha256sum --check <<< "$digest  $dest.part"
+        mv "$dest.part" "$dest"
+    fi
+}
+
+# The archive tag and the versions reported by its Linux binaries differ.
+media_url=https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1
+download "$media_url/ffmpeg-linux-x64" .tools/ffmpeg e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99
+download "$media_url/ffprobe-linux-x64" .tools/ffprobe 4f231a1960d83e403d08f7971e271707bec278a9ae18e21b8b5b03186668450d
+chmod +x .tools/ffmpeg .tools/ffprobe
+
+python3 -m venv .venv
+.venv/bin/python -m pip install --no-cache-dir --only-binary=:all: --disable-pip-version-check -r requirements.lock
+.venv/bin/python -m pip check
+npm --cache .tools/npm-cache ci --ignore-scripts --no-audit --no-fund
+PLAYWRIGHT_BROWSERS_PATH="$PWD/.tools/browsers" node_modules/.bin/playwright install --only-shell chromium
+
+# Extract pinned Ubuntu 24.04 runtime libraries for headless playback into this repo.
+# dpkg-deb -x unpacks files. It does not install packages or run package scripts.
+while read -r digest path; do
+    archive=".tools/downloads/${path##*/}"
+    download "https://archive.ubuntu.com/ubuntu/$path" "$archive" "$digest"
+    dpkg-deb -x "$archive" .tools/browser-libs
+done < scripts/browser-libs.lock
+
+echo "ArcherGate tools are ready. Run .venv/bin/python -m archergate demo."
