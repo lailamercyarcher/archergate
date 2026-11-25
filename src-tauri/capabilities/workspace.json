@@ -4,5 +4,5 @@
   "windows": ["main"],
   "local": false,
   "remote": {"urls": ["http://127.0.0.1:*/*"]},
-  "permissions": ["core:default", "allow-pick-media", "allow-workspace", "allow-choose-workspace", "allow-close-workspace"]
+  "permissions": ["core:default", "allow-pick-media", "allow-workspace", "allow-choose-workspace"]
 }

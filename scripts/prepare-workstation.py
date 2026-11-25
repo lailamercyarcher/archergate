@@ -59,6 +59,20 @@ def extract_files(archive, folder, names):
                 shutil.copyfileobj(contents, output)
 
 
+def visual_studio_generator():
+    vswhere = Path(os.environ["ProgramFiles(x86)"]) / "Microsoft Visual Studio/Installer/vswhere.exe"
+    version = subprocess.check_output([
+        vswhere, "-latest", "-products", "*", "-version", "[17.0,19.0)",
+        "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationVersion",
+    ], text=True).strip()
+    generators = {"17": "Visual Studio 17 2022", "18": "Visual Studio 18 2026"}
+    generator = generators.get(version.partition(".")[0])
+    if generator is None:
+        raise ValueError("Visual Studio 2022 or 2026 with the x64 C++ build tools is required.")
+    print(f"Using {generator} ({version})", flush=True)
+    return generator
+
+
 def build_whisper(archive, folder, toolchain):
     """Keep optional transcription independent of a workstation's C++ redistributable."""
     with TemporaryDirectory(prefix="archergate-whisper-") as temporary:
@@ -78,7 +92,8 @@ def build_whisper(archive, folder, toolchain):
         build = stage / "build"
         config = [
             "cmake", "-S", str(source), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release",
-            "-DCMAKE_POLICY_DEFAULT_CMP0091=NEW", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded",
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.15", "-DCMAKE_POLICY_DEFAULT_CMP0091=NEW",
+            "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded",
             "-DBUILD_SHARED_LIBS=OFF", "-DWHISPER_BUILD_TESTS=OFF", "-DWHISPER_BUILD_SERVER=OFF",
             "-DGGML_NATIVE=OFF", "-DGGML_OPENMP=OFF", "-DGGML_AVX=OFF", "-DGGML_AVX2=OFF",
             "-DGGML_BMI2=OFF", "-DGGML_SSE42=OFF", "-DGGML_FMA=OFF", "-DGGML_F16C=OFF", "-DGGML_CCACHE=OFF",
@@ -86,7 +101,7 @@ def build_whisper(archive, folder, toolchain):
         if toolchain:
             config.append(f"-DCMAKE_TOOLCHAIN_FILE={toolchain}")
         else:
-            config.extend(("-G", "Visual Studio 17 2022", "-A", "x64"))
+            config.extend(("-G", visual_studio_generator(), "-A", "x64"))
         subprocess.run(config, check=True)
         subprocess.run(["cmake", "--build", str(build), "--target", "whisper-cli",
                         "--config", "Release", "--parallel", "3"], check=True)

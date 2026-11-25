@@ -1,8 +1,8 @@
-name: Windows x64 test build
+name: Windows x64 development alpha
 
 on:
   push:
-    branches: [test/media-correctness-harness]
+    branches: [mission/004-editing-acceptance]
   workflow_dispatch:
 
 permissions:
@@ -10,14 +10,16 @@ permissions:
 
 jobs:
   workstation:
-    runs-on: windows-2022
-    timeout-minutes: 50
+    if: github.ref == 'refs/heads/mission/004-editing-acceptance'
+    runs-on: windows-latest
+    timeout-minutes: 60
     env:
       BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       RUSTUP_TOOLCHAIN: 1.100.0-x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
@@ -29,41 +31,67 @@ jobs:
           architecture: x64
           package-manager-cache: false
 
-      - name: Build and verify distribution
-        id: build
+      - name: Set up Windows Rust toolchain
         shell: pwsh
         run: |
           $build = Join-Path $env:RUNNER_TEMP "archergate-$env:BUILD_ID"
           $logs = New-Item -ItemType Directory -Path "$build-logs"
+          "ARCHERGATE_BUILD_DIR=$build" >> $env:GITHUB_ENV
+          "ARCHERGATE_LOG_DIR=$($logs.FullName)" >> $env:GITHUB_ENV
           rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal *>&1 |
             Tee-Object -FilePath (Join-Path $logs.FullName 'rustup.log')
           if ($LASTEXITCODE -ne 0) { throw 'Rust MSVC setup failed.' }
-          ./scripts/build-workstation.ps1 -OutputDirectory $build -PythonExecutable (Get-Command python.exe).Source *>&1 |
-            Tee-Object -FilePath (Join-Path $logs.FullName 'build.log')
 
-      - name: Smoke test on the Windows runner
-        timeout-minutes: 10
+      - name: Build and verify distribution
         shell: pwsh
         run: |
-          $build = Join-Path $env:RUNNER_TEMP "archergate-$env:BUILD_ID"
-          $setup = Get-ChildItem -LiteralPath (Join-Path $build 'distribution') -Filter '*-setup.exe' -File
-          # The packaged offline installer also provisions WebView2 when the runner needs it.
-          $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait -PassThru
-          "NSIS installer exit code $($install.ExitCode)" | Tee-Object -FilePath "$build-logs/install.log"
-          if ($install.ExitCode -ne 0) { throw 'The test installer failed.' }
-          ./scripts/smoke-workstation.ps1 -BuildDirectory $build -DiagnosticsDirectory "$build-logs" *>&1 |
-            Tee-Object -FilePath "$build-logs/smoke.log"
+          $log = "$env:ARCHERGATE_LOG_DIR/build.log"
+          try {
+            ./scripts/build-workstation.ps1 -OutputDirectory $env:ARCHERGATE_BUILD_DIR -PythonExecutable (Get-Command python.exe).Source *>&1 |
+              Tee-Object -FilePath $log
+          } catch {
+            $_ | Out-String | Add-Content -LiteralPath $log
+            throw
+          }
+
+      - name: Test editing, rendering and MCP on Windows
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $env:ARCHERGATE_FFMPEG = Join-Path $PWD 'src-tauri/payload/media-tools/ffmpeg.exe'
+          $env:ARCHERGATE_FFPROBE = Join-Path $PWD 'src-tauri/payload/media-tools/ffprobe.exe'
+          $env:ARCHERGATE_TEST_PYTHON = (Get-Command python.exe).Source
+          $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $env:RUNNER_TEMP 'archergate-playwright'
+          $env:PYTHONUTF8 = '1'
+          $log = "$env:ARCHERGATE_LOG_DIR/regression.log"
+          python -m pip install --only-binary=:all: -r requirements.lock *>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw 'Python test dependency setup failed.' }
+          python -m pip check *>&1 | Tee-Object -FilePath $log -Append
+          if ($LASTEXITCODE -ne 0) { throw 'Python test dependency validation failed.' }
+          python -m unittest discover -s tests/studio -v *>&1 | Tee-Object -FilePath $log -Append
+          if ($LASTEXITCODE -ne 0) { throw 'The Windows Studio Python regression failed.' }
+          npm ci --ignore-scripts --no-audit --no-fund *>&1 | Tee-Object -FilePath $log -Append
+          if ($LASTEXITCODE -ne 0) { throw 'Browser test dependency setup failed.' }
+          npx --no-install playwright install --only-shell chromium *>&1 | Tee-Object -FilePath $log -Append
+          if ($LASTEXITCODE -ne 0) { throw 'Chromium installation failed.' }
+          foreach ($test in @('browser.mjs', 'manual-editing.mjs')) {
+            node "tests/studio/$test" *>&1 | Tee-Object -FilePath $log -Append
+            if ($LASTEXITCODE -ne 0) { throw "The Windows browser regression failed: $test" }
+          }
+
+      - name: Install and smoke test on Windows
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          ./scripts/smoke-workstation.ps1 -BuildDirectory $env:ARCHERGATE_BUILD_DIR -DiagnosticsDirectory $env:ARCHERGATE_LOG_DIR *>&1 |
+            Tee-Object -FilePath "$env:ARCHERGATE_LOG_DIR/smoke.log"
+          Copy-Item -LiteralPath "$env:ARCHERGATE_LOG_DIR/smoke.json" -Destination "$env:ARCHERGATE_BUILD_DIR/distribution/"
 
       - name: Upload verified Windows packages
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         uses: actions/upload-artifact@v6
         with:
           name: archergate-win-x64-${{ github.sha }}-${{ env.BUILD_ID }}
-          path: |
-            ${{ runner.temp }}/archergate-${{ env.BUILD_ID }}/distribution/*.exe
-            ${{ runner.temp }}/archergate-${{ env.BUILD_ID }}/distribution/*.zip
-            ${{ runner.temp }}/archergate-${{ env.BUILD_ID }}/distribution/*.sha256
-            ${{ runner.temp }}/archergate-${{ env.BUILD_ID }}/distribution/verification.json
+          path: ${{ env.ARCHERGATE_BUILD_DIR }}/distribution/
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

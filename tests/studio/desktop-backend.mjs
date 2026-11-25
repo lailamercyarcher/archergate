@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 
 const token = randomBytes(32).toString("hex");
 const workspace = mkdtempSync(join(tmpdir(), "archergate-desktop-"));
-const child = spawn(".venv/bin/python",
+const child = spawn(process.env.ARCHERGATE_TEST_PYTHON || ".venv/bin/python",
   ["-m", "archergate.studio", "--workspace", workspace, "serve", "--port", "0", "--desktop"],
   {env: {...process.env, ARCHERGATE_SESSION_TOKEN: token}, stdio: ["pipe", "pipe", "inherit"]});
 try {

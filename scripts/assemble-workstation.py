@@ -1,6 +1,7 @@
 """Assemble the portable workstation ZIP once Tauri's Windows binary is built."""
 
 import argparse
+from filecmp import cmp
 import hashlib
 import json
 import shutil
@@ -15,6 +16,8 @@ PAYLOAD = ROOT / "src-tauri" / "payload"
 REQUIRED = (
     "python/python.exe", "python/python314.dll", "python/python314.zip", "python/python314._pth",
     "python/_socket.pyd", "python/_sqlite3.pyd", "python/sqlite3.dll", "python/LICENSE.txt",
+    "python/vcruntime140.dll", "python/vcruntime140_1.dll", "python/_ssl.pyd",
+    "python/libssl-3.dll", "python/libcrypto-3.dll",
     "media-tools/ffmpeg.exe", "media-tools/ffprobe.exe", "media-tools/FFmpeg-LICENSE.txt",
     "media-tools/FFmpeg-README.txt", "speech-tools/whisper-cli.exe", "speech-tools/LICENSE.txt",
     "engine/archergate/studio/__main__.py", "engine/archergate/studio/web.py",
@@ -51,9 +54,18 @@ def main():
         if stream.read(6) != b"PE\0\0\x64\x86":
             raise ValueError("The application must be a compiled Windows x64 executable.")
     payload = args.payload_dir
-    missing = [name for name in REQUIRED if not (payload / name).is_file() or not (payload / name).stat().st_size]
+    engine = {
+        f"engine/{path.relative_to(ROOT).as_posix()}": path
+        for path in (ROOT / "archergate").rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+    }
+    required = set(REQUIRED) | engine.keys()
+    missing = [name for name in sorted(required) if not (payload / name).is_file() or not (payload / name).stat().st_size]
     if missing:
         raise ValueError(f"Missing required payload files: {', '.join(missing)}")
+    for name, source in engine.items():
+        if not cmp(source, payload / name, shallow=False):
+            raise ValueError(f"Packaged engine differs from the checkout: {name}")
     root = args.output_dir
     root.mkdir(parents=True, exist_ok=True)
     folder = f"ArcherGate-{app_version()}"
@@ -68,12 +80,12 @@ def main():
             for path in sorted(payload.rglob("*")):
                 if path.is_file():
                     zip.write(path, f"{folder}/payload/{path.relative_to(payload).as_posix()}")
-            zip.write(ROOT / "docs" / "workstation-alpha.md", f"{folder}/Install and release notes.md")
+            zip.write(ROOT / "docs" / "windows-development-alpha.md", f"{folder}/Install and release notes.md")
         with ZipFile(staged) as zip:
             failed = zip.testzip()
             if failed:
                 raise ValueError(f"Invalid archive entry: {failed}")
-            required_entries = {f"{folder}/payload/{path}" for path in REQUIRED} | {f"{folder}/ArcherGate.exe"}
+            required_entries = {f"{folder}/payload/{path}" for path in required} | {f"{folder}/ArcherGate.exe"}
             if not required_entries <= set(zip.namelist()):
                 raise ValueError("Portable ZIP is missing required packaged files.")
         with staged.open("rb") as stream:
@@ -90,7 +102,7 @@ def main():
             for path in published:
                 path.unlink()
             raise
-    print(f"Verified portable ZIP CRCs and {len(REQUIRED)} required payload files.")
+    print(f"Verified portable ZIP CRCs, {len(required)} required payload files and engine source bytes.")
     print(name, digest)
     return 0
 

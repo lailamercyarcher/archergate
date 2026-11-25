@@ -35,13 +35,7 @@ Set `ASSET_ID` to the source's registered identifier before using the CLI exampl
 
 ## Windows x64 test builds
 
-An authorized update to `test/media-correctness-harness` starts the Windows job. Manual dispatch is available once the workflow exists on the default branch. Use **Actions → Windows x64 test build → Run workflow** and select the branch to build. With repository write access, the equivalent command is below. [GitHub manual workflow runs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
-
-```sh
-gh workflow run windows-test-build.yml --ref test/media-correctness-harness
-```
-
-The Windows Server 2022 job checks Python 3.14.2, Node 22.23.5, Rust 1.100.0 MSVC, Visual Studio 2022 C++ tools, CMake and the pinned Tauri CLI. It reuses the payload preparation script and its pinned hashes and builds with Cargo's lockfile. The unsigned NSIS installer and portable ZIP retain the application version from Tauri and Cargo, currently `0.2.0`. Run-specific output and upload names identify the build by commit SHA, run and attempt. The upload contains the two packages, SHA-256 sidecars and `verification.json`. Diagnostic logs and native smoke results appear in a separate artifact. [Windows Server 2022 runner image](https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md)
+An approved push to `mission/004-editing-acceptance` starts the **Windows x64 development alpha** workflow. The runner checks out the triggering commit and builds with pinned Python, Node, Rust MSVC and Tauri versions, the Windows image’s CMake and C++ tools, and Cargo’s lockfile. The app and NSIS installer use the **ArcherGate Alpha** identity and `0.3.0-alpha.1` version. The artifact name identifies the source commit, run and attempt. [GitHub runner images](https://github.com/actions/runner-images)
 
 On a local Windows x64 build host, run the same packaging script in PowerShell. With no output argument it creates a new `artifacts/test-build-*` directory. A supplied output path must be new. The script uses the Python launcher by default. Pass `-PythonExecutable` to select a Python 3.14 x64 executable.
 
@@ -49,7 +43,7 @@ On a local Windows x64 build host, run the same packaging script in PowerShell. 
 ./scripts/build-workstation.ps1 -OutputDirectory 'C:\work\archergate-test-build'
 ```
 
-The job starts the new NSIS installer in silent mode on the disposable runner, using its existing offline WebView2 setup. The smoke runs the embedded Python doctor with the packaged FFmpeg binaries, then launches the extracted portable application. It checks authenticated WebView2 startup, drives the native picker through Windows UI Automation, confirms the chosen synthetic filename in the WebView2 import form, and checks that closing the window also stops its Python child. Run the smoke with a fresh interactive Windows user profile. [Tauri Windows installer options](https://v2.tauri.app/distribute/windows-installer/) · [Tauri NSIS silent flag](https://v2.tauri.app/distribute/microsoft-store/)
+The job runs the Studio and Chromium regressions, verifies both package checksums, and checks the NSIS installation against the extracted ZIP byte for byte. The smoke runs the bundled tools and authenticates to the packaged backend. On an interactive desktop, it also launches the portable application, checks WebView2 startup, selects a synthetic file via Windows UI Automation, and verifies shutdown. A runner without an interactive desktop records **OWNER SMOKE TEST REQUIRED**. The build publishes the package artifact after the required steps pass and preserves its diagnostic logs on failure. See [the alpha download and verification steps](windows-development-alpha.md).
 
 ## Workroom editing
 
