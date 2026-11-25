@@ -17,6 +17,7 @@ from archergate.media import ROOT, ExperimentError, sha256
 FORMATS = {".mp4": "mov", ".mov": "mov", ".wav": "wav", ".mp3": "mp3"}
 ASSET_ID = re.compile(r"[a-f0-9]{32}")
 DEFAULT_WORKSPACE = ROOT / "workspace" / "studio"
+PROXY_PROFILES = {"compact": (640, 360), "standard": (960, 540)}
 
 
 def binary(name):
@@ -37,7 +38,8 @@ def binary(name):
 
 def run(executable, *args, timeout=1800):
     try:
-        return subprocess.run([executable, *args], check=True, timeout=timeout, capture_output=True).stdout
+        return subprocess.run([executable, *args], check=True, timeout=timeout, capture_output=True,
+                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0).stdout
     except subprocess.CalledProcessError as error:
         message = error.stderr.decode(errors="replace").strip()
         raise ExperimentError(f"{Path(executable).name}: {message[-1500:] or 'processing failed'}") from error
@@ -83,15 +85,16 @@ def probe(path):
     return {"origin": str(origin), "duration": str(duration), "streams": streams}
 
 
-def create_proxy(source, metadata, folder):
+def create_proxy(source, metadata, folder, profile):
     streams = metadata["streams"]
     proxy = folder / ("proxy.mp4" if "video" in streams else "proxy.m4a")
-    args = ["-copyts", "-start_at_zero", *input_args(source), "-map_metadata", "-1", "-map_chapters", "-1"]
+    width, height = PROXY_PROFILES[profile]
+    args = ["-copyts", "-start_at_zero", "-threads", "2", *input_args(source), "-map_metadata", "-1", "-map_chapters", "-1"]
     if "video" in streams:
         args += ["-map", f"0:{streams['video']['index']}", "-vf",
-                 "scale=w='min(960,iw)':h='min(540,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+                 f"scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
                  "-fps_mode", "passthrough", "-enc_time_base", "1:90000",
-                 "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p"]
+                 "-c:v", "libx264", "-preset", "fast", "-threads:v", "2", "-pix_fmt", "yuv420p"]
     if "audio" in streams:
         args += ["-map", f"0:{streams['audio']['index']}", "-c:a", "aac", "-ar", "48000"]
     ffmpeg(*args, "-movflags", "+faststart", proxy)
@@ -105,7 +108,7 @@ def create_proxy(source, metadata, folder):
         if abs(Fraction(original["duration"]) - Fraction(derived["duration"])) > tolerance:
             raise ExperimentError(f"Proxy did not preserve the {kind} stream duration within 50 ms.")
     return {
-        "file": proxy.name, "probe": result,
+        "file": proxy.name, "probe": result, "profile": profile,
         "source_time_at_proxy_zero": metadata["origin"],
         "stream_start_deltas": {kind: str(Fraction(result["streams"][kind]["start"]) -
                                          Fraction(row["start"])) for kind, row in streams.items()},
@@ -219,9 +222,23 @@ class Library:
     def original(self, asset):
         return self.path("media", asset["id"], "original", asset["name"])
 
-    def import_media(self, path, provenance, rights, backend=None, model=None):
+    def transcribe(self, asset_id, backend, model):
+        asset = self.asset(asset_id)
+        original = self.original(asset)
+        if not original.is_file() or sha256(original) != asset["sha256"]:
+            raise ExperimentError(f"Missing or changed original: {asset['name']}.")
+        with TemporaryDirectory(dir=self.root) as analysis:
+            result = transcript(original, asset["source"]["streams"].get("audio"), Path(analysis), backend, model)
+        asset["transcript"] = result
+        with self.connect() as db:
+            db.execute("UPDATE assets SET details = ? WHERE id = ?", (json.dumps(asset), asset_id))
+        return result
+
+    def import_media(self, path, provenance, rights, backend=None, model=None, *, profile="standard"):
         provenance = user_text(provenance, "Provenance")
         rights = user_text(rights, "Rights")
+        if not isinstance(profile, str) or profile not in PROXY_PROFILES:
+            raise ExperimentError("Choose compact or standard proxy quality.")
         path = Path(path).expanduser().resolve(strict=True)
         if not path.is_file() or path.suffix.lower() not in FORMATS:
             raise ExperimentError("Choose a local MP4, MOV, WAV or MP3 file.")
@@ -235,7 +252,7 @@ class Library:
             if sha256(original) != digest or sha256(path) != digest:
                 raise ExperimentError("The input changed while it was being copied.")
             metadata = probe(original)
-            proxy = create_proxy(original, metadata, folder)
+            proxy = create_proxy(original, metadata, folder, profile)
             streams = metadata["streams"]
             with TemporaryDirectory(dir=self.root) as analysis:
                 analysis = Path(analysis)

@@ -3,20 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ArcherGate cinematic workspace</title>
+  <title>ArcherGate Media Lab</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
 <main>
-  <header><h1>ArcherGate</h1><nav aria-label="Workspace"><a href="#media">Media</a><a href="#timelines">Timelines</a><a href="#direction">Director’s Memory</a></nav></header>
+  <header class="masthead"><h1>ArcherGate <span>Media Lab</span></h1><nav aria-label="Workspace"><a href="#timelines">Work</a><a href="#media">Materials</a><a href="#direction">Lab</a></nav></header>
+  <div class="row" id="desktop-controls" hidden><span id="workspace-path"></span><button id="choose-workspace" type="button">Open workspace</button></div>
   <p id="status" role="status"></p>
   <section id="media">
-    <h2>Media library</h2>
+    <h2>Materials</h2>
     <form id="import" class="row">
       <label>Local file path<input name="path" required placeholder="MP4, MOV, WAV or MP3"></label>
+      <button type="button" id="pick-media" hidden>Choose files</button>
       <label>Provenance<input name="provenance" required></label>
       <label>Rights note<input name="rights" required></label>
+      <label>Proxy<select name="profile"><option value="compact">Compact · 360p</option><option value="standard">Standard · 540p</option></select></label>
       <button>Import media</button>
     </form>
     <form id="search" class="row"><label>Search assets<input name="q" type="search"></label><button>Search</button></form>
@@ -26,17 +29,44 @@
     </div>
   </section>
   <section id="timelines">
-    <h2>Timelines</h2>
+    <h2>Work</h2>
     <div class="row"><label>Edit<select id="edit"></select></label><label>Compare with<select id="alternative"></select></label>
-    <button id="compare">Compare edits</button><button id="export">Export Premiere XML</button></div>
+    <button id="compare">Compare edits</button><button id="export">Export Premiere XML</button>
+    <button id="preview-edit">Render preview</button><button id="preview-compare">Render A/B</button></div>
+    <div id="sequence-preview" aria-live="polite"></div>
+    <details id="creative-direction" hidden>
+      <summary>Creative direction · Claude</summary>
+      <form id="creative-form">
+        <label>Direction<textarea name="direction" rows="3" maxlength="1400" required></textarea></label>
+        <div class="row">
+          <label>Claude API key<input name="key" type="password" autocomplete="off" required></label>
+          <label>Model<select name="model"><option value="claude-sonnet-5">Claude Sonnet 5</option><option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option></select></label>
+        </div>
+        <fieldset>
+          <legend>Optional context to send</legend>
+          <label><input name="frames" type="checkbox"> Up to three still frames</label>
+          <label><input name="dialogue" type="checkbox"> Up to six transcript excerpts</label>
+          <label><input name="memory" type="checkbox"> Up to five Director’s Memory entries</label>
+        </fieldset>
+        <label><input name="send" type="checkbox" required> Send this direction, clip timing, and selected context to Anthropic using my API account.</label>
+        <button>Generate playable revision</button>
+      </form>
+    </details>
     <div id="edit-details" class="split"></div>
-    <label for="manifest">Version 2 manifest</label>
+    <details id="edit-manifest" open><summary>Timeline manifest</summary>
+    <label for="manifest">Timeline JSON</label>
     <textarea id="manifest" spellcheck="false" rows="12"></textarea>
     <div class="row"><button id="inspect">Review proposed edit</button><button id="save-edit">Save new edit</button></div>
     <ul id="review" aria-live="polite"></ul>
+    </details>
   </section>
   <section id="direction">
-    <h2>Director’s Memory</h2>
+    <h2>Lab</h2>
+    <div id="speech-tools" class="row" hidden>
+      <span id="speech-status"></span>
+      <button id="speech-download" type="button">Download English model</button>
+    </div>
+    <h3>Director’s Memory</h3>
     <div class="split">
       <form id="memory">
         <input type="hidden" name="id">

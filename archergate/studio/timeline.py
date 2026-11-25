@@ -6,6 +6,7 @@ from fractions import Fraction
 from archergate.media import ExperimentError, identifier
 
 from .library import user_text
+from .operations import check_effects
 
 
 def rational(value, field):
@@ -29,8 +30,8 @@ def tick(value, field, minimum=0):
 def schema(manifest):
     if not isinstance(manifest, dict) or set(manifest) != {"version", "id", "title", "timebase", "fps", "tracks"}:
         raise ExperimentError("Timeline needs version, id, title, timebase, fps and tracks.")
-    if type(manifest["version"]) is not int or manifest["version"] != 2:
-        raise ExperimentError("Timeline version must be 2.")
+    if type(manifest["version"]) is not int or manifest["version"] not in (2, 3):
+        raise ExperimentError("Timeline version must be 2 or 3.")
     identifier(manifest["id"])
     user_text(manifest["title"], "Title", 250)
     timebase = rational(manifest["timebase"], "Timebase")
@@ -41,6 +42,7 @@ def schema(manifest):
     if not isinstance(tracks, list) or not 1 <= len(tracks) <= 24:
         raise ExperimentError("Timeline needs 1–24 tracks.")
     seen_tracks, seen_clips = set(), set()
+    optional = {"sync", "note", "effects"} if manifest["version"] == 3 else {"sync", "note"}
     for track in tracks:
         if not isinstance(track, dict) or set(track) != {"id", "kind", "clips"} or track["kind"] not in ("video", "audio"):
             raise ExperimentError("Each track needs id, video/audio kind and clips.")
@@ -52,7 +54,7 @@ def schema(manifest):
             raise ExperimentError(f"Track {name} supports up to 500 clips.")
         for clip in track["clips"]:
             required = {"id", "asset", "at", "source_start", "duration"}
-            if not isinstance(clip, dict) or not required <= clip.keys() or clip.keys() - required - {"sync", "note"}:
+            if not isinstance(clip, dict) or not required <= clip.keys() or clip.keys() - required - optional:
                 raise ExperimentError("Clips need id, asset, at, source_start and duration. Optional fields are sync and note.")
             clip_id = identifier(clip["id"])
             if clip_id in seen_clips:
@@ -65,6 +67,8 @@ def schema(manifest):
             tick(clip["at"], "Timeline start")
             tick(clip["source_start"], "Source start")
             tick(clip["duration"], "Duration", minimum=1)
+            if "effects" in clip:
+                check_effects(track["kind"], clip["duration"], clip["effects"])
     if not seen_clips:
         raise ExperimentError("Timeline needs at least one clip.")
     return timebase, fps
@@ -167,7 +171,7 @@ def list_timelines(library):
 def compare(library, left, right):
     a, b = (load(library, name) for name in (left, right))
     def rows(manifest):
-        return {clip["id"]: {"track": track["id"], "kind": track["kind"], "asset": clip["asset"],
+        return {clip["id"]: {"track": track["id"], "kind": track["kind"], "asset": clip["asset"], "effects": clip.get("effects", {}),
                              **{key: str(clip[key] * Fraction(manifest["timebase"])) for key in ("at", "source_start", "duration")}}
                 for track in manifest["tracks"] for clip in track["clips"]}
     first, second = rows(a), rows(b)

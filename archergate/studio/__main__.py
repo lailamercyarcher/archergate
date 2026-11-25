@@ -9,7 +9,7 @@ from pathlib import Path
 
 from archergate.media import ExperimentError, read_json
 
-from . import fixtures, interchange, memory, timeline
+from . import fixtures, interchange, memory, operations, timeline
 from .library import DEFAULT_WORKSPACE, Library, binary, run
 
 
@@ -29,6 +29,9 @@ def main():
     inspect.add_argument("manifest", type=Path)
     save = sub.add_parser("save")
     save.add_argument("manifest", type=Path)
+    proposal = sub.add_parser("apply-operations")
+    proposal.add_argument("base")
+    proposal.add_argument("proposal", type=Path)
     compare = sub.add_parser("compare")
     compare.add_argument("left")
     compare.add_argument("right")
@@ -39,6 +42,7 @@ def main():
     for name in ("serve", "launch"):
         server = sub.add_parser(name)
         server.add_argument("--port", type=int, default=8020)
+        server.add_argument("--desktop", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     try:
@@ -64,6 +68,8 @@ def main():
                 result = timeline.inspect(library, read_json(args.manifest))
             case "save":
                 result = timeline.save(library, read_json(args.manifest))
+            case "apply-operations":
+                result = operations.apply(library, args.base, read_json(args.proposal))
             case "compare":
                 result = timeline.compare(library, args.left, args.right)
             case "export":
@@ -72,7 +78,7 @@ def main():
                 result = memory.write(library, read_json(args.record)) if args.record else memory.records(library)
             case "serve" | "launch":
                 from .web import serve
-                serve(library, args.port, open_browser=args.command == "launch")
+                serve(library, args.port, open_browser=args.command == "launch", desktop=args.desktop)
                 return 0
         print(json.dumps(result, indent=2))
     except (ExperimentError, OSError, sqlite3.Error) as error:

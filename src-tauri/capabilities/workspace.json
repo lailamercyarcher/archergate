@@ -1,0 +1,8 @@
+{
+  "identifier": "workspace",
+  "description": "The main window on the private ArcherGate backend",
+  "windows": ["main"],
+  "local": false,
+  "remote": {"urls": ["http://127.0.0.1:*/*"]},
+  "permissions": ["core:default", "allow-pick-media", "allow-workspace", "allow-choose-workspace", "allow-close-workspace"]
+}

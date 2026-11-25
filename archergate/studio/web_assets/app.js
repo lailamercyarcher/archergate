@@ -1,17 +1,25 @@
 const $ = selector => document.querySelector(selector);
 const assets = new Map();
 let edits = [];
+let pendingPaths = [];
+let busy = 0;
+const invoke = window.__TAURI__?.core?.invoke;
 
 async function api(path, value, xml = false) {
-  const response = await fetch(path, value === undefined ? {} : {
-    method: "POST", headers: {"Content-Type": "application/json", "X-ArcherGate-Workspace": "1"},
-    body: JSON.stringify(value),
-  });
-  if (!response.ok) {
-    const result = await response.json();
-    throw new Error(result.error || `Request failed (${response.status})`);
+  if (value !== undefined) busy++;
+  try {
+    const response = await fetch(path, value === undefined ? {} : {
+      method: "POST", headers: {"Content-Type": "application/json", "X-ArcherGate-Workspace": "1"},
+      body: JSON.stringify(value),
+    });
+    if (!response.ok) {
+      const result = await response.json();
+      throw new Error(result.error || `Request failed (${response.status})`);
+    }
+    return xml ? response.blob() : response.json();
+  } finally {
+    if (value !== undefined) busy--;
   }
-  return xml ? response.blob() : response.json();
 }
 
 function action(handler) {
@@ -76,6 +84,14 @@ async function showAsset(id, position) {
   view.replaceChildren(node("h3", asset.name), player,
     node("p", `${asset.provenance} · ${asset.rights}`, "details"),
     node("p", `SHA-256 ${asset.sha256}`, "details"));
+  view.append(button("Start edit from source", () => makeDraft(asset)));
+  if (asset.source.streams.audio && (await api("/api/speech")).installed) {
+    view.append(button("Transcribe English", async () => {
+      $("#status").textContent = "Analyzing speech locally…";
+      await api("/api/transcribe", {asset: id});
+      await showAsset(id, player.currentTime);
+    }));
+  }
   const wave = asset.waveform;
   if (wave.state === "complete") {
     const canvas = node("canvas");
@@ -111,6 +127,93 @@ async function showAsset(id, position) {
   }
 }
 
+function makeDraft(asset) {
+  const candidate = asset.source.streams.video?.avg_frame_rate;
+  const fraction = candidate?.match(/^([1-9][0-9]*)\/(1|1001)$/);
+  const fps = fraction && number(candidate) <= 240 ? candidate : "24/1";
+  const [frames, denominator] = fps.split("/");
+  const rate = number(fps);
+  const tracks = Object.entries(asset.source.streams).flatMap(([kind, stream]) => {
+    const at = Math.max(0, Math.ceil(number(stream.start) * rate - 1e-7));
+    const end = Math.floor((number(stream.start) + number(stream.duration)) * rate + 1e-7);
+    return end > at ? [{id: kind, kind, clips: [{
+      id: `source-${kind}`, asset: asset.id, at, source_start: at, duration: end - at, sync: "source",
+    }]}] : [];
+  });
+  if (!tracks.length) throw new Error("The source is shorter than one timeline frame.");
+  $("#manifest").value = JSON.stringify({
+    version: 2, id: `edit-${Date.now()}`, title: asset.name, timebase: `${denominator}/${frames}`, fps, tracks,
+  }, null, 2);
+  $("#review").replaceChildren();
+  $("#edit-manifest").open = true;
+  $("#manifest").scrollIntoView({block: "center"});
+  $("#manifest").focus();
+}
+
+async function showSequence(names, editorial = null) {
+  if (names.some(name => !name)) return;
+  const container = $("#sequence-preview");
+  $("#status").textContent = "Rendering sequence preview locally…";
+  const keys = [];
+  for (const name of names) keys.push((await api("/api/preview", {name})).key);
+  const player = node("video");
+  player.controls = true;
+  player.preload = "auto";
+  player.setAttribute("aria-label", "Composed sequence preview");
+  const controls = node("div", undefined, "row");
+  const download = node("a", "Download rendered MP4");
+  let selected = 0;
+  let cue = 0;
+  let resume = false;
+  let generation = 0;
+  const activate = (index, preserve = true) => {
+    if (preserve && player.readyState >= 1) {
+      cue = player.currentTime;
+      resume = !player.paused;
+    }
+    const current = ++generation;
+    selected = index;
+    if (preserve) player.addEventListener("loadedmetadata", () => {
+      if (current !== generation) return;
+      player.currentTime = Math.min(cue, player.duration);
+      if (resume) player.play().catch(() => {});
+    }, {once: true});
+    player.src = `/api/preview/${keys[index]}`;
+    download.href = player.src;
+    download.download = `${names[index]}-preview.mp4`;
+    for (let i = 0; i < controls.children.length; i++) controls.children[i].setAttribute("aria-pressed", String(i === selected));
+  };
+  if (keys.length > 1) {
+    controls.append(...["A", "B"].map((name, index) =>
+      button(`Show ${name}`, () => { if (index !== selected) activate(index); })));
+  }
+  activate(0, false);
+  const decisions = node("div", undefined, "row");
+  decisions.append(download);
+  if (keys.length > 1) {
+    async function recordDecision(decision) {
+      if (names[0] === names[1]) throw new Error("Choose a different revision to compare.");
+      const title = edits.find(edit => edit.id === names[1])?.title || names[1];
+      const description = editorial ? `${editorial.direction}\n\n${editorial.rationale}`
+        : `Revision ${names[1]} compared against ${names[0]}.`;
+      await api("/api/memory", {kind: "suggestion", decision, title, description});
+      if (decision === "rejected" && selected === 1) activate(0);
+      await refreshMemory();
+      $("#status").textContent = decision === "accepted" ? "Revision accepted." : "Revision rejected.";
+    }
+    decisions.append(button("Accept B", () => recordDecision("accepted")),
+      button("Reject B", () => recordDecision("rejected")));
+    if (invoke) decisions.append(button("Refine B", () => {
+      $("#edit").value = names[1];
+      selectEdit();
+      $("#creative-direction").open = true;
+      $("#creative-form").elements.direction.focus();
+    }));
+  }
+  container.replaceChildren(controls, player, decisions);
+  $("#status").textContent = "";
+}
+
 function showTimeline(edit, changed = new Set()) {
   const view = node("article");
   view.append(node("h3", edit.title));
@@ -143,6 +246,9 @@ function selectEdit() {
   $("#manifest").value = edit ? JSON.stringify(edit, null, 2) : "";
   $("#export").disabled = !edit;
   $("#compare").disabled = edits.length < 2;
+  $("#preview-edit").disabled = !edit;
+  $("#preview-compare").disabled = edits.length < 2;
+  $("#sequence-preview").replaceChildren();
   $("#review").replaceChildren();
 }
 
@@ -177,13 +283,22 @@ $("#import").addEventListener("submit", action(async event => {
   submit.disabled = true;
   $("#status").textContent = "Importing and analyzing media locally…";
   try {
-    const asset = await api("/api/import", fields(form));
+    const values = fields(form);
+    const paths = pendingPaths.length ? pendingPaths : [values.path];
+    let asset;
+    while (paths.length) {
+      asset = await api("/api/import", {...values, path: paths[0]});
+      paths.shift();
+      if (pendingPaths.length) form.elements.path.value = pendingPaths[0] || "";
+    }
     form.reset();
     await refreshAssets();
     await showAsset(asset.id);
     $("#status").textContent = "Media imported.";
   } finally { submit.disabled = false; }
 }));
+$("#preview-edit").addEventListener("click", action(() => showSequence([$("#edit").value])));
+$("#preview-compare").addEventListener("click", action(() => showSequence([$("#edit").value, $("#alternative").value])));
 $("#search").addEventListener("submit", action(event => refreshAssets(fields(event.target).q)));
 $("#edit").addEventListener("change", selectEdit);
 $("#compare").addEventListener("click", action(async () => {
@@ -226,4 +341,73 @@ $("#memory").addEventListener("submit", action(async event => {
 action(async () => {
   await refreshAssets();
   await Promise.all([refreshEdits(), refreshMemory()]);
+})();
+
+if (invoke) action(async () => {
+  window.addEventListener("archer-close", action(async () => {
+    if (busy) throw new Error("Wait for the active media job to finish before closing.");
+    await invoke("close_workspace");
+  }));
+  $("#desktop-controls").hidden = false;
+  $("#edit-manifest").open = false;
+  $("#pick-media").hidden = false;
+  $("#speech-tools").hidden = false;
+  $("#creative-direction").hidden = false;
+  $("#creative-form").addEventListener("submit", action(async event => {
+    const base = $("#edit").value;
+    if (!base) throw new Error("Select a saved edit before requesting a revision.");
+    const form = event.target;
+    const consent = Object.fromEntries(["send", "frames", "dialogue", "memory"].map(key => [key, form.elements[key].checked]));
+    const {direction, key, model} = fields(form);
+    form.elements.key.value = "";
+    form.elements.send.checked = false;
+    const submit = form.querySelector("button");
+    submit.disabled = true;
+    $("#status").textContent = "Requesting an editorial proposal from Claude…";
+    try {
+      const result = await api("/api/creative-revision", {base, direction, key, model, consent});
+      await refreshEdits(base);
+      $("#alternative").value = result.id;
+      await showSequence([base, result.id], {direction, rationale: result.rationale});
+      const explanation = node("details");
+      explanation.append(node("summary", "Editorial rationale"), node("p", result.rationale));
+      $("#sequence-preview").append(explanation);
+      $("#status").textContent = result.cached ? "Revision rendered from a previously approved response." : "Revision ready.";
+    } finally {
+      submit.disabled = false;
+    }
+  }));
+  $("#workspace-path").textContent = await invoke("workspace");
+  function selected(paths) {
+    if (!paths.length) return;
+    pendingPaths = paths;
+    $("#import").elements.path.value = paths[0];
+    $("#status").textContent = `${paths.length} file${paths.length === 1 ? "" : "s"} selected.`;
+  }
+  $("#import").elements.path.addEventListener("input", () => { pendingPaths = []; });
+  $("#pick-media").addEventListener("click", action(async () => selected(await invoke("pick_media"))));
+  $("#choose-workspace").addEventListener("click", action(async () => {
+    if (busy) throw new Error("Wait for the active media job to finish.");
+    await invoke("choose_workspace");
+  }));
+  window.addEventListener("archer-drop", event => {
+    if (!busy && Array.isArray(event.detail) && event.detail.length) {
+      selected(event.detail);
+      $("#import").scrollIntoView({block: "center"});
+    }
+  });
+  async function refreshSpeech() {
+    const {installed} = await api("/api/speech");
+    $("#speech-download").hidden = installed;
+    $("#speech-status").textContent = installed ? "English transcription ready" : "English transcription unavailable";
+  }
+  $("#speech-download").addEventListener("click", action(async () => {
+    const control = $("#speech-download");
+    control.disabled = true;
+    $("#speech-status").textContent = "Downloading the English model (~74 MB)…";
+    try { await api("/api/speech/install", {}); await refreshSpeech(); }
+    catch (error) { $("#speech-status").textContent = "English transcription unavailable"; throw error; }
+    finally { control.disabled = false; }
+  }));
+  await refreshSpeech();
 })();

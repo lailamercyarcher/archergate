@@ -60,6 +60,8 @@ def format_file(node, asset, source_fps, uri):
 
 def build(library, manifest):
     base, fps = timeline.schema(manifest)
+    if any(clip.get("effects") for track in manifest["tracks"] for clip in track["clips"]):
+        raise ExperimentError("Editable XML cannot carry cinematic effects. Render this revision or export its base edit.")
     report = timeline.inspect(library, manifest)
     if not report["valid"]:
         raise ExperimentError("XML export requires a valid timeline.")

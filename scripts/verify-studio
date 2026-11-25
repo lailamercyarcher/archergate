@@ -3,3 +3,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 .venv/bin/python -m unittest discover -s tests/studio -v
 PLAYWRIGHT_BROWSERS_PATH="$PWD/.tools/browsers" node tests/studio/browser.mjs
+node tests/studio/desktop-backend.mjs

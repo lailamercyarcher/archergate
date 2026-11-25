@@ -46,6 +46,24 @@ try {
   await page.getByRole("button", {name: "Compare edits"}).click();
   await page.getByRole("status").getByText("1 changed clip.").waitFor();
   assert.equal(await page.locator("#edit-details article").count(), 2);
+  await page.getByRole("button", {name: "Render A/B"}).click();
+  const rendered = page.locator("#sequence-preview video");
+  await page.waitForFunction(() => document.querySelector("#sequence-preview video")?.readyState >= 2);
+  await rendered.evaluate(video => { video.currentTime = 1.25; });
+  await page.waitForFunction(() => !document.querySelector("#sequence-preview video").seeking);
+  const sourceA = await rendered.getAttribute("src");
+  await page.getByRole("button", {name: "Show B"}).click();
+  await page.waitForFunction(() => {
+    const video = document.querySelector("#sequence-preview video");
+    return video.readyState >= 2 && !video.seeking && Math.abs(video.currentTime - 1.25) < 0.04;
+  });
+  assert.notEqual(await rendered.getAttribute("src"), sourceA);
+  await page.getByRole("button", {name: "Show A"}).click();
+  assert.equal(await rendered.getAttribute("src"), sourceA);
+  await page.getByRole("button", {name: "Show B"}).click();
+  await page.getByRole("button", {name: "Reject B"}).click();
+  await page.getByText("Revision rejected.", {exact: true}).waitFor();
+  assert.equal(await rendered.getAttribute("src"), sourceA);
   await page.getByRole("button", {name: "Review proposed edit"}).click();
   await page.locator("#review").getByText(/J-cut/).waitFor();
   const download = page.waitForEvent("download");
@@ -72,7 +90,12 @@ try {
   await page.getByLabel("Provenance", {exact: true}).fill("Synthetic browser import");
   await page.getByLabel("Rights note").fill("Locally generated");
   await page.getByRole("button", {name: "Import media"}).click();
-  await page.getByText("Media imported.", {exact: true}).waitFor();
+  try {
+    // Speech inference can share a CPU with the Windows build.
+    await page.getByText("Media imported.", {exact: true}).waitFor({timeout: 60_000});
+  } catch (error) {
+    throw new Error(`Browser import ended at: ${await page.locator("#status").textContent()}`, {cause: error});
+  }
   const speechConfigured = ["ARCHERGATE_TEST_SPEECH_WAV", "ARCHERGATE_WHISPER", "ARCHERGATE_WHISPER_MODEL"]
     .every(key => process.env[key]);
   if (speechConfigured) {

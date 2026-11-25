@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ArcherGate",
+  "version": "0.2.0",
+  "identifier": "com.archergate.medialab",
+  "build": {"frontendDist": "../desktop/ui"},
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {"capabilities": ["workspace"]}
+  },
+  "bundle": {
+    "active": true,
+    "useLocalToolsDir": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": {"payload/": "payload/"},
+    "windows": {
+      "webviewInstallMode": {"type": "offlineInstaller", "silent": true},
+      "nsis": {"installMode": "currentUser"}
+    }
+  }
+}
