@@ -212,6 +212,24 @@ try {
   assert.match(xmlText, /Scene%20lumi%C3%A8re\.mov/);
   assert.match(xmlText, /Musique%20caf%C3%A9\.mp3/);
 
+  await page.reload();
+  await page.waitForFunction(id => document.querySelector("#edit").value === id, trimmedRevision);
+  await page.getByRole("button", {name: "render & watch"}).click();
+  await page.waitForFunction(() => document.querySelector("#sequence-preview video")?.readyState >= 2);
+  const reopenedUrl = await rendered.getAttribute("src");
+  const originalPreviewHash = hashFile(previewPath);
+  writeFileSync(previewPath, "damaged cache");
+  assert.equal((await page.request.get(origin + reopenedUrl, {headers: {Range: "bytes=0-15"}})).status(), 404);
+  const recovered = page.waitForResponse(response => response.url() === origin + "/api/preview" &&
+    response.request().method() === "POST" && response.ok());
+  await page.getByRole("button", {name: "render & watch"}).click();
+  await recovered;
+  await page.waitForFunction(() => document.querySelector("#sequence-preview video")?.readyState >= 2);
+  const restoredRange = await page.request.get(origin + reopenedUrl, {headers: {Range: "bytes=0-15"}});
+  assert.equal(restoredRange.status(), 206);
+  assert.deepEqual(await restoredRange.body(), readFileSync(previewPath).subarray(0, 16));
+  assert.equal(hashFile(previewPath), originalPreviewHash);
+
   await page.getByRole("button", {name: "revert to parent revision"}).click();
   await page.getByRole("status").getByText(`Reverted to saved parent revision ${audioRevision}.`, {exact: true}).waitFor({timeout: 60_000});
   assert.equal(await page.locator("#edit").inputValue(), audioRevision);
@@ -231,16 +249,109 @@ try {
   assert.equal(registeredHashes.find(([name]) => name === "Scene lumière.mov")[1], hashes[0]);
   assert.equal(registeredHashes.find(([name]) => name === "Musique café.mp3")[1], hashes[1]);
 
+  const activeRevision = () => page.evaluate(async () =>
+    (await (await fetch(`/api/timeline/revision?id=${document.querySelector("#edit").value}`)).json()));
+  const videoLane = page.locator(".timeline-strip.video");
+  const inserted = videoLane.getByRole("button", {name: /^insert-/});
+  await inserted.click();
+  assert.equal(await inserted.getAttribute("aria-pressed"), "true");
+  const ruler = page.getByRole("slider", {name: "sequence playhead"});
+  await ruler.press("End");
+  for (let index = 0; index < 12; index++) await ruler.press("ArrowLeft");
+  assert.equal(await page.locator("#playhead-tick").inputValue(), "84");
+  await page.getByRole("button", {name: "split selected clip at playhead"}).click();
+  await page.getByRole("status").getByText(/Split the selected clip/).waitFor();
+  const split = await activeRevision();
+  assert.equal(split.parent_id, audioRevision);
+  const clips = split.manifest.tracks[0].clips;
+  assert.deepEqual(clips.slice(-2).map(({at, source_start, duration}) => [at, source_start, duration]),
+    [[72, 12, 12], [84, 24, 12]]);
+
+  const tail = videoLane.getByRole("button", {name: /^split-/});
+  await dragByTicks(tail, 12, 96);
+  await page.getByRole("status").getByText(/Moved the selected clip/).waitFor();
+  const moved = await activeRevision();
+  assert.equal(moved.parent_id, split.manifest.id);
+  assert.deepEqual(moved.manifest.tracks[0].clips.at(-1), {...clips.at(-1), at: 96});
+  await dragByTicks(tail, -3, 108, "out");
+  await page.getByRole("status").getByText(/Trimmed out-point by 3 ticks/).waitFor();
+  const draggedTrim = await activeRevision();
+  assert.equal(draggedTrim.parent_id, moved.manifest.id);
+  assert.deepEqual(draggedTrim.manifest.tracks[0].clips.at(-1), {...clips.at(-1), at: 96, duration: 9});
+  await dragByTicks(tail, -15, 105);
+  await page.getByRole("status").getByText(/simultaneous clips/).waitFor();
+  assert.equal((await activeRevision()).sha256, draggedTrim.sha256);
+
+  async function dragByTicks(target, delta, length, edge = null) {
+    const locator = edge ? target.locator(`[data-edge="${edge}"]`) : target;
+    await target.scrollIntoViewIfNeeded();
+    const rect = await locator.boundingBox();
+    const {width} = await videoLane.boundingBox();
+    const x = rect.x + rect.width / 2;
+    const y = rect.y + rect.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + delta * width / length, y, {steps: 6});
+    await page.mouse.up();
+  }
+
+  if (process.env.ARCHERGATE_TEST_SPEECH_WAV && process.env.ARCHERGATE_WHISPER && process.env.ARCHERGATE_WHISPER_MODEL) {
+    const speech = process.env.ARCHERGATE_TEST_SPEECH_WAV;
+    const speechHash = hashFile(speech);
+    await page.locator("#destination-track").selectOption("audio");
+    await page.locator("#playhead-tick").fill("105");
+    await page.getByRole("navigation", {name: "workspace"}).getByRole("link", {name: "materials"}).click();
+    await page.evaluate(path => { window.__AG_TEST_PATHS = [path]; }, speech);
+    await page.getByRole("button", {name: "+ import"}).click();
+    await page.locator("#import [name=provenance]").fill("Synthetic voice");
+    await page.locator("#import [name=rights]").fill("Generated locally for testing");
+    await page.getByRole("button", {name: "import selected footage"}).click();
+    await page.getByRole("status").getByText("media imported and available for playback", {exact: true}).waitFor({timeout: 60_000});
+    const phrase = page.getByRole("button", {name: /documentary/i});
+    await phrase.click();
+    assert.equal(await phrase.getAttribute("aria-pressed"), "true");
+    await page.getByRole("button", {name: "insert selected passage into sequence"}).click();
+    await page.getByRole("status").getByText(/Inserted the selected passage/).waitFor();
+    const passage = await activeRevision();
+    const insertedSpeech = passage.manifest.tracks[1].clips.at(-1);
+    assert.equal(insertedSpeech.at, 105);
+    const speechAsset = await page.evaluate(async id => (await fetch(`/api/asset/${id}`)).json(), insertedSpeech.asset);
+    assert.equal(speechAsset.sha256, speechHash);
+    const row = speechAsset.transcript.segments.find(segment => /documentary/i.test(segment.text));
+    const seconds = rational => {
+      const [top, bottom = 1] = rational.split("/");
+      return Number(top) / Number(bottom);
+    };
+    assert.ok(Math.abs(insertedSpeech.source_start / 24 - seconds(row.start)) < 1 / 24);
+    const stream = speechAsset.source.streams.audio;
+    const availableEnd = seconds(stream.start) + seconds(stream.duration);
+    assert.ok(Math.abs((insertedSpeech.source_start + insertedSpeech.duration) / 24 -
+                       Math.min(seconds(row.end), availableEnd)) < 1 / 24);
+    await page.getByRole("button", {name: "render & watch"}).click();
+    await page.waitForFunction(() => document.querySelector("#sequence-preview video")?.readyState >= 2);
+    const speechPreview = join(workspace, "previews", `${(await rendered.getAttribute("src")).split("/").pop()}.mp4`);
+    const decoded = execFileSync(python, ["-c", `
+import sys
+from pathlib import Path
+from archergate.studio.library import ffmpeg, input_args
+print(max(abs(int.from_bytes(b, 'little', signed=True)) for b in __import__('itertools').batched(
+    ffmpeg("-ss", "4.375", *input_args(Path(sys.argv[1])), "-t", "0.9", "-vn", "-ac", "1", "-f", "s16le", "-"), 2)))
+`, speechPreview], {encoding: "utf8"});
+    assert.ok(Number(decoded) > 500, `expected decoded speech above silence: ${decoded}`);
+    assert.equal(hashFile(speech), speechHash);
+    console.log("Chromium: selected a real whisper.cpp passage, saved its original-backed audio clip and decoded its rendered audio");
+  }
+
   await page.getByRole("navigation", {name: "workspace"}).getByRole("link", {name: "materials"}).click();
   const assetCount = await page.locator("#assets li").count();
-  await page.evaluate(paths => window.__AG_TEST_PATHS.push(...paths), [malformedPath]);
+  await page.evaluate(path => { window.__AG_TEST_PATHS = [path]; }, malformedPath);
   await page.getByRole("button", {name: "+ import"}).click();
   await page.locator("#import [name=provenance]").fill("Invalid media test");
   await page.locator("#import [name=rights]").fill("Generated locally for testing");
   await page.getByRole("button", {name: "import selected footage"}).click();
   await page.getByRole("status").getByText(/Could not import broken video\.mp4/).waitFor();
   await page.getByRole("button", {name: "close"}).click();
-  await page.evaluate(paths => window.__AG_TEST_PATHS.push(...paths), [unsupportedPath]);
+  await page.evaluate(path => { window.__AG_TEST_PATHS = [path]; }, unsupportedPath);
   await page.getByRole("button", {name: "+ import"}).click();
   await page.locator("#import [name=provenance]").fill("Invalid media test");
   await page.locator("#import [name=rights]").fill("Generated locally for testing");
@@ -249,7 +360,7 @@ try {
   await page.getByRole("button", {name: "close"}).click();
   await page.waitForFunction(count => document.querySelectorAll("#assets li").length === count, assetCount);
   assert.deepEqual(errors, []);
-  console.log("Desktop-bridge UI: multi-file import, Unicode paths, source marking, picture/audio insert, one-frame trim, decoded MP4/XML export, parent revert and reload verified");
+  console.log("Desktop-bridge UI: import, picture/audio insert, one-frame trim, decoded MP4/XML export, saved revision reopen, corrupt cache recovery, clip split, pointer move/trim and overlapping move rejection verified");
 } finally {
   if (browser) await browser.close();
   if (server.exitCode === null && server.signalCode === null) {

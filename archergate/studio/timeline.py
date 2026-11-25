@@ -163,10 +163,31 @@ def save(library, manifest):
     return result
 
 
-def commit_revision(library, manifest, *, parent_id, parent_sha256, operation, payload):
+def _validate_revision(library, manifest):
     result = inspect(library, manifest)
     if not result["valid"]:
-        raise ExperimentError("Fix timeline errors before committing a revision.")
+        errors = "; ".join(row["explanation"] for row in result["issues"] if row["level"] == "error")
+        raise ExperimentError("Fix timeline errors before committing a revision: " + errors[:1200])
+    return result
+
+
+def _verify_revision_sources(library, manifest):
+    assets = {clip["asset"] for track in manifest["tracks"] for clip in track["clips"]}
+    for asset_id in sorted(assets):
+        library.verify_original(library.asset(asset_id))
+
+
+def prepare_revision(library, manifest):
+    result = _validate_revision(library, manifest)
+    with library.connect() as db:
+        if db.execute("SELECT 1 FROM timelines WHERE id = ?", (manifest["id"],)).fetchone():
+            raise ExperimentError("Timeline ID already exists. Give the alternative a new ID.")
+    _verify_revision_sources(library, manifest)
+    return result
+
+
+def commit_revision(library, manifest, *, parent_id, parent_sha256, operation, payload):
+    result = _validate_revision(library, manifest)
     identifier(parent_id)
     identifier(manifest["id"])
     if not isinstance(parent_sha256, str) or len(parent_sha256) != 64:
@@ -178,12 +199,6 @@ def commit_revision(library, manifest, *, parent_id, parent_sha256, operation, p
         "payload": payload,
     })
     revision_sha256 = digest(manifest)
-    assets = {
-        clip["asset"]
-        for track in manifest["tracks"]
-        for clip in track["clips"]
-    }
-
     def prior_result(db):
         previous = db.execute("""
             SELECT operation, fingerprint, parent_id, parent_sha256, revision_sha256, result
@@ -203,8 +218,7 @@ def commit_revision(library, manifest, *, parent_id, parent_sha256, operation, p
     if existing is not None:
         return existing
 
-    for asset_id in assets:
-        library.verify_original(library.asset(asset_id))
+    _verify_revision_sources(library, manifest)
 
     with library.connect() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -244,6 +258,25 @@ def parent_revision(library, name):
     with library.connect() as db:
         row = db.execute("SELECT parent_id FROM timeline_commands WHERE revision_id = ?", (name,)).fetchone()
     return row[0] if row else None
+
+
+def inspect_revision(library, name):
+    identifier(name)
+    with library.connect() as db:
+        row = db.execute("""
+            SELECT details, parent_id, parent_sha256, operation
+            FROM timelines LEFT JOIN timeline_commands ON timelines.id = timeline_commands.revision_id
+            WHERE timelines.id = ?
+        """, (name,)).fetchone()
+    if row is None:
+        raise ExperimentError(f"Unknown timeline {name}.")
+    details, parent_id, parent_sha256, operation = row
+    manifest = json.loads(details)
+    return {
+        "manifest": manifest, "sha256": digest(manifest),
+        "parent_id": parent_id, "parent_sha256": parent_sha256, "operation": operation,
+        "validation": inspect(library, manifest),
+    }
 
 
 def list_timelines(library):

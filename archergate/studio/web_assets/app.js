@@ -7,6 +7,7 @@ let sourceRange = null;
 let refreshSourceRange = () => {};
 let lastTimelineId = null;
 let pendingRevisionCommand = null;
+let selectedClipId = null;
 const invoke = window.__TAURI__?.core?.invoke;
 const initialPreview = $("#preview-empty").cloneNode(true);
 
@@ -298,9 +299,34 @@ async function showAsset(id, position) {
     }
     const entries = analysis.candidates || analysis.segments;
     if (!entries.length) view.append(node("p", "Analysis completed with no results.", "details"));
-    for (const row of entries) {
+    const selection = node("div", undefined, "passage-list");
+    let segment = null;
+    for (const [index, row] of entries.entries()) {
       const time = row.time ?? row.start;
-      view.append(button(`${seconds(number(time))} · ${row.text ?? `Scene score ${row.score.toFixed(2)}`}`, () => seek(time)));
+      const cue = button(`${seconds(number(time))} · ${row.text ?? `Scene score ${row.score.toFixed(2)}`}`, () => {
+        seek(time);
+        if (row.text !== undefined) {
+          segment = index;
+          for (const mark of selection.querySelectorAll("button")) {
+            mark.setAttribute("aria-pressed", String(mark === cue));
+          }
+          insert.disabled = false;
+        }
+      });
+      if (row.text !== undefined) cue.setAttribute("aria-pressed", "false");
+      selection.append(cue);
+    }
+    view.append(selection);
+    const insert = button("insert selected passage into sequence", async () => {
+      const edit = edits.find(row => row.id === $("#edit").value);
+      if (!edit) throw new Error("Start or select a sequence before inserting a passage.");
+      await commitTimelineEdit(edit, "passage", {
+        asset_id: asset.id, track_id: $("#destination-track").value, segment, at: playheadTick(),
+      }, "Inserted the selected passage.");
+    });
+    if (invoke && analysis.segments?.length) {
+      insert.disabled = true;
+      view.append(insert);
     }
   }
 }
@@ -408,23 +434,71 @@ async function showSequence(names, editorial = null) {
   $("#status").textContent = "";
 }
 
-function showTimeline(edit, changed = new Set()) {
+function showTimeline(edit, changed = null) {
   const view = node("article");
   view.append(node("h3", edit.title));
   const base = number(edit.timebase);
+  const length = Math.max(1, ...edit.tracks.flatMap(row => row.clips.map(clip => clip.at + clip.duration)));
+  const editable = !!invoke && !changed;
+  const split = button("split selected clip at playhead", () => commitTimelineEdit(edit, "split", {
+    clip_id: selectedClipId, at: playheadTick(),
+  }, "Split the selected clip."));
+  split.disabled = !selectedClipId;
+  if (editable) {
+    const ruler = node("input", undefined, "timeline-ruler");
+    ruler.type = "range";
+    ruler.min = "0";
+    ruler.max = length;
+    ruler.step = frameTicks(edit);
+    ruler.setAttribute("aria-label", "sequence playhead");
+    ruler.addEventListener("input", () => {
+      $("#playhead-tick").value = ruler.value;
+      updatePlayheadDisplay(edit);
+    });
+    view.append(ruler, split);
+  }
+
+  function select(clip) {
+    selectedClipId = clip.id;
+    for (const mark of view.querySelectorAll(".timeline-segment")) {
+      mark.setAttribute("aria-pressed", String(mark.dataset.clip === clip.id));
+    }
+    split.disabled = false;
+  }
+
   for (const track of edit.tracks) {
     const lane = node("div", undefined, "track");
     lane.append(node("h4", `${track.id} · ${track.kind}`));
-    const length = Math.max(1, ...edit.tracks.flatMap(row => row.clips.map(clip => clip.at + clip.duration)));
     const strip = node("div", undefined, `timeline-strip ${track.kind}`);
     strip.setAttribute("aria-label", `${track.kind} segments`);
+    if (editable) strip.addEventListener("click", event => {
+      if (event.target !== strip) return;
+      const {left, width} = strip.getBoundingClientRect();
+      const step = frameTicks(edit);
+      $("#playhead-tick").value = Math.max(0, Math.round((event.clientX - left) * length / width / step) * step);
+      updatePlayheadDisplay(edit);
+    });
     for (const clip of track.clips) {
-      const mark = button("", async () => { navigateTo("media"); await showAsset(clip.asset, clip.source_start * base); });
+      const mark = button("", async () => {
+        if (editable) select(clip);
+        else { navigateTo("media"); await showAsset(clip.asset, clip.source_start * base); }
+      });
       mark.className = "timeline-segment";
       mark.style.left = `${clip.at * 100 / length}%`;
       mark.style.width = `${clip.duration * 100 / length}%`;
       mark.setAttribute("aria-label", `${clip.id}, ${seconds(clip.duration * base)}`);
       mark.title = assets.get(clip.asset)?.name || clip.asset;
+      if (editable) {
+        mark.dataset.clip = clip.id;
+        mark.setAttribute("aria-pressed", String(selectedClipId === clip.id));
+        for (const edge of ["in", "out"]) {
+          const handle = node("span", undefined, "trim-handle");
+          handle.dataset.edge = edge;
+          handle.title = `Drag to trim ${edge}-point`;
+          mark.append(handle);
+        }
+        enableClipDrag(mark, strip, length, edit, clip, select);
+      }
       strip.append(mark);
     }
     lane.append(strip);
@@ -438,11 +512,11 @@ function showTimeline(edit, changed = new Set()) {
           navigateTo("media");
           await showAsset(clip.asset, clip.source_start * base);
         });
-      if (changed.has(clip.id)) cue.classList.add("accent");
+      if (changed?.has(clip.id)) cue.classList.add("accent");
       const entry = node("div", undefined, "clip-entry");
       const trimIn = button("trim in 1 frame", () => trimClip(edit, clip, "in"));
       const trimOut = button("trim out 1 frame", () => trimClip(edit, clip, "out"));
-      trimIn.disabled = trimOut.disabled = !invoke;
+      trimIn.disabled = trimOut.disabled = !editable;
       entry.append(cue, trimIn, trimOut);
       lane.append(entry);
       last = end;
@@ -450,6 +524,67 @@ function showTimeline(edit, changed = new Set()) {
     view.append(lane);
   }
   return view;
+}
+
+function frameTicks(edit) {
+  const [baseNumerator, baseDenominator] = fraction(edit.timebase);
+  const [fpsNumerator, fpsDenominator] = fraction(edit.fps);
+  const ticksNumerator = baseDenominator * fpsDenominator;
+  const ticksDenominator = baseNumerator * fpsNumerator;
+  return ticksNumerator % ticksDenominator ? 1 : Number(ticksNumerator / ticksDenominator);
+}
+
+function playheadTick() {
+  const at = Number($("#playhead-tick").value);
+  if (!Number.isSafeInteger(at) || at < 0) throw new Error("Playhead must be a non-negative integer tick.");
+  return at;
+}
+
+function enableClipDrag(mark, strip, length, edit, clip, select) {
+  let drag;
+  mark.addEventListener("pointerdown", event => {
+    if (event.button !== 0 || drag) return;
+    select(clip);
+    mark.setPointerCapture(event.pointerId);
+    drag = {pointer: event.pointerId, x: event.clientX, edge: event.target.dataset.edge, delta: 0};
+  });
+  mark.addEventListener("pointermove", event => {
+    if (drag?.pointer !== event.pointerId) return;
+    const pixels = event.clientX - drag.x;
+    const step = frameTicks(edit);
+    const delta = Math.abs(pixels) < 3 ? 0 : Math.round(pixels * length / strip.clientWidth / step) * step;
+    drag.delta = drag.edge === "in" ? Math.max(0, Math.min(clip.duration - step, delta))
+      : drag.edge === "out" ? Math.min(0, Math.max(step - clip.duration, delta))
+      : Math.max(-clip.at, delta);
+    const start = clip.at + (drag.edge === "out" ? 0 : drag.delta);
+    const duration = clip.duration + (drag.edge === "in" ? -drag.delta : drag.edge === "out" ? drag.delta : 0);
+    mark.style.left = `${start * 100 / length}%`;
+    mark.style.width = `${duration * 100 / length}%`;
+  });
+  function reset() {
+    mark.style.left = `${clip.at * 100 / length}%`;
+    mark.style.width = `${clip.duration * 100 / length}%`;
+    drag = null;
+  }
+  mark.addEventListener("lostpointercapture", reset);
+  mark.addEventListener("pointerup", action(async event => {
+    if (drag?.pointer !== event.pointerId) return;
+    const {edge, delta} = drag;
+    reset();
+    if (!delta) return;
+    if (edge) await trimClip(edit, clip, edge, Math.abs(delta));
+    else await commitTimelineEdit(edit, "move", {clip_id: clip.id, at: clip.at + delta}, "Moved the selected clip.");
+  }));
+}
+
+async function commitTimelineEdit(edit, verb, fields, message) {
+  if (busy) throw new Error("Wait for the current operation to finish.");
+  const command = {base_id: edit.id, ...fields};
+  const result = await api(`/api/timeline/${verb}`, {...command, revision_id: revisionId({verb, ...command})});
+  pendingRevisionCommand = null;
+  await refreshEdits(result.id);
+  navigateTo("timelines");
+  $("#status").textContent = `${message} Saved as ${result.id}.`;
 }
 
 async function insertSelectedRange(asset) {
@@ -463,8 +598,7 @@ async function insertSelectedRange(asset) {
   const sourceEnd = microsToTicks(sourceRange.outMicros, edit.timebase);
   const duration = sourceEnd - sourceStart;
   if (duration < 1) throw new Error("The selected source range must be at least one frame.");
-  const at = Number($("#playhead-tick").value);
-  if (!Number.isSafeInteger(at) || at < 0) throw new Error("Playhead must be a non-negative integer tick.");
+  const at = playheadTick();
   const trackId = $("#destination-track").value;
   const command = {
     base_id: edit.id, asset_id: asset.id, track_id: trackId,
@@ -478,21 +612,21 @@ async function insertSelectedRange(asset) {
   $("#status").textContent = `Inserted ${duration} ticks at tick ${at}. Saved as ${result.id}.`;
 }
 
-async function trimClip(edit, clip, edge) {
+async function trimClip(edit, clip, edge, amount) {
   const [baseNumerator, baseDenominator] = fraction(edit.timebase);
   const [fpsNumerator, fpsDenominator] = fraction(edit.fps);
   const ticksNumerator = baseDenominator * fpsDenominator;
   const ticksDenominator = baseNumerator * fpsNumerator;
-  if (ticksNumerator % ticksDenominator) {
+  if (amount === undefined && ticksNumerator % ticksDenominator) {
     throw new Error("A single frame cannot be represented by this sequence timebase.");
   }
-  const command = {base_id: edit.id, clip_id: clip.id, edge, amount: Number(ticksNumerator / ticksDenominator)};
+  const command = {base_id: edit.id, clip_id: clip.id, edge, amount: amount ?? Number(ticksNumerator / ticksDenominator)};
   const result = await api("/api/timeline/trim", {...command, revision_id: revisionId(command)});
   pendingRevisionCommand = null;
   await refreshEdits(result.id);
   navigateTo("timelines");
   await showSequence([result.id]);
-  $("#status").textContent = `Trimmed ${edge}-point by one frame. Saved as ${result.id}.`;
+  $("#status").textContent = `Trimmed ${edge}-point by ${amount === undefined ? "one frame" : `${amount} ticks`}. Saved as ${result.id}.`;
 }
 
 async function updateRevisionControls(edit) {
@@ -513,10 +647,18 @@ function updatePlayheadDisplay(edit) {
   $("#playhead-timecode").textContent = edit && Number.isSafeInteger(ticks) && ticks >= 0
     ? `${timecode(ticks, edit.timebase, edit.fps)} · ${seconds(ticks * number(edit.timebase))}`
     : "--";
+  const ruler = $("#edit-details .timeline-ruler");
+  if (ruler) {
+    ruler.value = ticks;
+    ruler.setAttribute("aria-valuetext", $("#playhead-timecode").textContent);
+    const position = Math.max(0, Math.min(100, 100 * (ticks || 0) / Number(ruler.max)));
+    $("#edit-details").style.setProperty("--playhead-position", `${position}%`);
+  }
 }
 
 function selectEdit() {
   const edit = edits.find(row => row.id === $("#edit").value);
+  if (!edit?.tracks.some(track => track.clips.some(clip => clip.id === selectedClipId))) selectedClipId = null;
   $("#edit-details").replaceChildren(...(edit ? [showTimeline(edit)] : []));
   $("#manifest").value = edit ? JSON.stringify(edit, null, 2) : "";
   $("#export").disabled = !edit;
@@ -731,7 +873,10 @@ $("#import").addEventListener("submit", action(async event => {
 $("#preview-edit").addEventListener("click", action(() => showSequence([$("#edit").value])));
 $("#preview-compare").addEventListener("click", action(() => showSequence([$("#edit").value, $("#alternative").value])));
 $("#search").addEventListener("submit", action(event => refreshAssets(fields(event.target).q)));
-$("#edit").addEventListener("change", selectEdit);
+$("#edit").addEventListener("change", () => {
+  selectedClipId = null;
+  selectEdit();
+});
 $("#playhead-tick").addEventListener("input", () =>
   updatePlayheadDisplay(edits.find(row => row.id === $("#edit").value)));
 $("#undo-edit").addEventListener("click", action(async () => {

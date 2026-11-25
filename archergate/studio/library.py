@@ -224,6 +224,10 @@ class Library:
             raise ExperimentError(f"Unknown asset {asset_id}.")
         return json.loads(row[0])
 
+    def source_metadata(self, asset_id):
+        asset = self.asset(asset_id)
+        return {key: asset[key] for key in ("id", "name", "provenance", "rights", "sha256", "source")}
+
     def original(self, asset):
         return self.path("media", asset["id"], "original", asset["name"])
 

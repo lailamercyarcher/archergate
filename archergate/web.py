@@ -97,39 +97,42 @@ class PreviewHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Render unavailable. Run the demo command.")
             return
         with stream:
-            length = fstat(stream.fileno()).st_size
-            requested = self.headers.get("Range")
-            start, end = 0, length - 1
-            if requested is not None:
-                try:
-                    start, end = byte_range(requested, length)
-                except ValueError:
-                    self.send_response(416)
-                    self.send_header("Content-Range", f"bytes */{length}")
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                    return
-            remaining = end - start + 1
-            self.send_response(206 if requested is not None else 200)
-            if requested is not None:
-                self.send_header("Content-Range", f"bytes {start}-{end}/{length}")
-            self.send_header("Content-Type", mime)
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Length", str(remaining))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            if send_body:
-                stream.seek(start)
-                try:
-                    while remaining:
-                        chunk = stream.read(min(remaining, 64 * 1024))
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        remaining -= len(chunk)
-                except (BrokenPipeError, ConnectionResetError):
-                    # Browsers may cancel a read when the viewer seeks.
-                    return
+            self.serve_media_stream(stream, mime, send_body)
+
+    def serve_media_stream(self, stream, mime, send_body):
+        length = fstat(stream.fileno()).st_size
+        requested = self.headers.get("Range")
+        start, end = 0, length - 1
+        if requested is not None:
+            try:
+                start, end = byte_range(requested, length)
+            except ValueError:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{length}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        remaining = end - start + 1
+        self.send_response(206 if requested is not None else 200)
+        if requested is not None:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{length}")
+        self.send_header("Content-Type", mime)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(remaining))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if send_body:
+            stream.seek(start)
+            try:
+                while remaining:
+                    chunk = stream.read(min(remaining, 64 * 1024))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                # Browsers may cancel a read when the viewer seeks.
+                return
 
 
 def serve(workspace, port):

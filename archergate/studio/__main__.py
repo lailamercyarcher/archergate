@@ -32,6 +32,12 @@ def main():
     proposal = sub.add_parser("apply-operations")
     proposal.add_argument("base")
     proposal.add_argument("proposal", type=Path)
+    sub.add_parser("inspect-revision").add_argument("revision")
+    sub.add_parser("inspect-source").add_argument("asset")
+    for name in ("prepare-edit", "commit-edit"):
+        edit = sub.add_parser(name)
+        edit.add_argument("operation", choices=operations.EDITS)
+        edit.add_argument("request", type=Path)
     compare = sub.add_parser("compare")
     compare.add_argument("left")
     compare.add_argument("right")
@@ -70,6 +76,13 @@ def main():
                 result = timeline.save(library, read_json(args.manifest))
             case "apply-operations":
                 result = operations.apply(library, args.base, read_json(args.proposal))
+            case "inspect-revision":
+                result = timeline.inspect_revision(library, args.revision)
+            case "inspect-source":
+                result = library.source_metadata(args.asset)
+            case "prepare-edit" | "commit-edit":
+                result = operations.edit(library, args.operation, read_json(args.request),
+                                         prepare=args.command == "prepare-edit")
             case "compare":
                 result = timeline.compare(library, args.left, args.right)
             case "export":
