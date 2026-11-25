@@ -9,7 +9,7 @@ py -3.14 scripts/prepare-workstation.py
 Check-NativeExit
 
 # This is the maintainer build command, from a Windows x64 machine
-# with Rust MSVC, Visual Studio Build Tools and Node already set up.
+# with Rust MSVC, Visual Studio 2022 Build Tools, CMake and Node already set up.
 npx --yes --package=@tauri-apps/cli@2.12.6 tauri build --target x86_64-pc-windows-msvc --ci --no-sign -- --locked
 Check-NativeExit
 

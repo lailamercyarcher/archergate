@@ -13,6 +13,7 @@ PAYLOAD = ROOT / "src-tauri" / "payload"
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--exe", default=RELEASE / "archergate.exe", type=Path)
+    parser.add_argument("--output-dir", default=ROOT / "artifacts", type=Path)
     args = parser.parse_args()
     executable = args.exe
     with executable.open("rb") as stream:
@@ -22,8 +23,8 @@ def main():
                 "speech-tools/whisper-cli.exe", "engine/archergate/studio/web_assets/index.html"]
     if any(not (PAYLOAD / name).is_file() for name in required):
         raise ValueError("Run scripts/prepare-workstation.py before assembling.")
-    root = ROOT / "artifacts"
-    root.mkdir(exist_ok=True)
+    root = args.output_dir
+    root.mkdir(parents=True, exist_ok=True)
     name = root / "ArcherGate-0.2.0-win-x64-portable.zip"
     staged = name.with_suffix(".zip.part")
     folder = "ArcherGate-0.2.0"

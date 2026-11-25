@@ -24,13 +24,16 @@ Tauri hosts the existing local Python workspace in a native WebView2 window. The
 
 The package includes the runtime license notices for Python, FFmpeg, and whisper.cpp. FFmpeg's pinned Windows package is the Gyan 6.1.1 essentials build distributed under GPL v3. Its exact source reference and configuration are in the packaged FFmpeg README. Hauora Sans is included under SIL OFL 1.1. [Pinned FFmpeg source commit](https://github.com/FFmpeg/FFmpeg/commit/e38092ef93) · [Hauora Sans](https://github.com/WCYS-Co/Hauora-Sans)
 
-On Windows x64 with the build prerequisites already configured, maintainers can run `scripts/build-workstation.ps1`. Generated files land in the ignored `artifacts` directory. On Linux, see the release evidence for what was built and tested. Do not use a deployed or public repository runner for private footage.
+On Windows x64 with Python 3.14, Rust MSVC, Visual Studio 2022 Build Tools, CMake and Node configured, maintainers can run `scripts/build-workstation.ps1`. Generated files land in the ignored `artifacts` directory. The build now compiles the pinned whisper.cpp source with static C and C++ runtimes and OpenMP disabled. On Linux, the payload preparation script accepts a Windows x64 CMake toolchain that links its runtimes statically. Do not use a deployed or public repository runner for private footage.
 
 ## Linux verification
 
 - Synthetic J-cut and L-cut exports decoded with picture and audio. The first test interval contained audio in the J-cut and silence in the L-cut. Chrome switched between the composed edits at the same playhead position and recorded a rejection while returning to the base.
 - A data-only push-in changed the decoded image. Source hashes and the base manifest matched their initial values. Unsupported operations and editable XML export of a revision with effects were rejected.
-- The real MCP and browser regression workflows, CPU Whisper test, bounded context selection and private desktop backend session tests ran on Linux. Closing the parent pipe shut down the backend. The existing Experiment 001 verification passed again.
 - A local Linux test imported an eight-second 1080p/24 fps synthetic clip in 6.57 seconds using a compact proxy. The composed preview took 3.87 seconds. Peak measured FFmpeg child RSS was 139.1 MiB. This measurement excludes the desktop window and represents one sample on the Codespace host.
 - The approved interface image was unavailable. The current interface uses the requested concrete and olive palette, Hauora Sans and Work, Materials and Lab navigation. Visual fidelity to the reference remains unverified.
 - No live Claude request, Windows workstation launch, Windows optional speech test or Premiere import was performed. Local consent and context bounds were tested without spending API credits. An actual natural-language revision requires an explicitly approved request using the workstation user's own API key.
+
+## Transcription runtime fix
+
+The first downloads carry an optional speech executable whose loader expects Microsoft C++ and OpenMP DLLs that can be absent on a clean Windows workstation. The rebuilt executable uses the same pinned whisper.cpp version. In an isolated Wine test with those runtimes disabled, the original executable failed at startup and the static build produced a timed segment from synthetic English audio. Native Windows and the WebView2 application remain separate verification steps. The original downloads retain their published hashes.
