@@ -1,0 +1,22 @@
+# Experiment 002 implementation and verification plan
+
+Experiment 002 starts from the verified Experiment 001 branch tip. Keep its demo, server, manifests and verification script working. Add a separate local workspace and portable Python entry point using SQLite, FFmpeg, static browser assets and the existing opt-in MCP transport. Store private data in the user workspace.
+
+| Slice | Implementation | Evidence required |
+| --- | --- | --- |
+| Media library | Copy originals byte for byte, probe primary streams, create H.264/AAC or AAC proxies, retain timestamps and stream offsets, and extract waveform, thumbnail and shot candidates. Store metadata and analysis state in SQLite. Optional CPU-only whisper.cpp produces timed English segments. | Import four real formats, including mismatched dimensions and rates, delayed audio and synthetic dialogue. Compare hashes, frame/sample timing and proxy playback. Distinguish skipped, failed and completed analysis. |
+| Editorial grammar | Version 2 timelines use rational seconds per tick, independent ordered picture and sound tracks, explicit source and timeline starts, and half-open ranges. Combine offsets and overlapping audio to express J-cuts and L-cuts. Return errors and evidence-based review suggestions without changing edits. | Verify source boundaries, gaps, overlapping audio, J/L placements and review behavior. |
+| Interchange | Export editable xmeml v5 referencing byte-identical managed originals. Validate frame conversion and structure. Fail with an actionable explanation when a rate or position cannot be represented precisely. | Parse exported XML and check source URIs, timebases, ranges, output track offsets and channel routing. Actual Premiere import and relink remain a workstation test. |
+| Director's Memory and workspace | Store and edit creative references, preferences, notes, and decisions separately from machine observations. Browser and MCP share library, validation and export functions with the CLI. | A real browser browses, plays, seeks, compares and exports. The official MCP client discovers and calls the scoped tools. Verify records persist across process restarts. |
+
+The media engine uses Python standard-library SQLite and subprocesses. Reuse the existing FFmpeg build on Linux and accept explicitly configured FFmpeg/ffprobe or PATH on Windows. FFmpeg licensing depends on the build, with the existing libx264-enabled static build distributed under GPL terms. whisper.cpp is optional (MIT code, separate model distribution). Evaluate OpenTimelineIO's xmeml adapter for native-wheel portability and precise rate handling. Python's XML writer is sufficient for the small subset if the adapter introduces a native dependency without solving those conversions.
+
+Expected gaps in local verification include native Windows execution and an actual Premiere workstation import. Record those limits explicitly.
+
+## Observed results
+
+- Linux FFmpeg and ffprobe 7.0.2 imported synthetic MP4, MOV, WAV and MP3. Four original hashes matched their managed copies and the files on disk. The tested 24 fps and 30000/1001 video frame timestamps matched their proxies within one 90 kHz tick. The delayed audio fixture retained its quarter-second offset within AAC encoder delay. The known one-second scene boundary was detected.
+- The default studio suite passed seven Python tests and the Chrome workflow, with the optional speech check skipped. A second run with whisper.cpp 1.8.2, the tiny English model and eSpeak NG dialogue passed all eight Python tests and Chrome, including transcript navigation. The speech review flagged a cut inside a detected segment without changing its manifest.
+- The real MCP client discovered and invoked the five studio tools. Chrome 159.0.8154.6 loaded both video and audio proxies, sought to a shot, imported a local file, compared J/L variants, downloaded XML and persisted a creative decision and its revision across reload. Direct database access and an unmarked write request were rejected.
+- XML checks confirmed source URIs, mono dialogue, stereo music source-channel references, independent clip offsets and rejection of non-frame-aligned requests. No Premiere session or native Windows workstation was available during verification. Windows x64 Python 3.14 wheels were resolved for all 29 locked MCP packages.
+- Experiment 001's existing verification passed its five Python tests and real Chrome playback and seek checks on the new branch.

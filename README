@@ -33,7 +33,7 @@ in a local media player. To watch and compare side by side:
 
 In Codespaces, open the Ports tab, forward port 8000 if needed, confirm
 its visibility is Private and open it in the browser. On a local machine,
-open http://127.0.0.1:8000. Use the two video players to play, pause and
+open http://127.0.y0.1:8000. Use the two video players to play, pause and
 seek. The rows below each player show cut order and source frame ranges.
 Press Ctrl+C in the terminal to stop the preview.
 
@@ -108,3 +108,10 @@ source assets and cut order are reproducible, and encoded bytes can vary
 across hosts, font sets and FFmpeg builds.
 
 The plan and observed verification results are in docs/experiment-001-plan.md.
+
+ArcherGate Experiment 002
+========================
+
+The local cinematic workspace lives alongside the Experiment 001 demo.
+See docs/experiment-002.md for Windows and Linux setup, the timeline
+format, optional speech analysis and the Premiere handoff.

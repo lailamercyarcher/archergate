@@ -83,6 +83,13 @@ class PreviewHandler(BaseHTTPRequestHandler):
     def serve_video(self, filename, send_body):
         try:
             path = media.storage_path(self.workspace, "renders", filename)
+        except (OSError, media.ExperimentError):
+            self.send_error(404, "Render unavailable. Run the demo command.")
+            return
+        self.serve_media(path, "video/mp4", send_body)
+
+    def serve_media(self, path, mime, send_body):
+        try:
             if not path.is_file():
                 raise FileNotFoundError(path)
             stream = path.open("rb")
@@ -106,7 +113,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             self.send_response(206 if requested is not None else 200)
             if requested is not None:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{length}")
-            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Type", mime)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(remaining))
             self.send_header("Cache-Control", "no-store")

@@ -1,6 +1,5 @@
 """Shared media and editorial operations for Experiment 001."""
 
-import fcntl
 import hashlib
 import json
 import re
@@ -141,6 +140,8 @@ def named_manifest(edit):
 
 @contextmanager
 def workspace_lock(workspace):
+    import fcntl
+
     root = data_root(workspace)
     root.mkdir(parents=True, exist_ok=True)
     lock_path = local_child(root, ".lock")

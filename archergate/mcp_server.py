@@ -40,8 +40,15 @@ def make_server(workspace):
 def main():
     parser = argparse.ArgumentParser(description="ArcherGate Experiment 001 MCP server (stdio)")
     parser.add_argument("--workspace", type=Path, default=media.ROOT / "workspace")
+    parser.add_argument("--studio", type=Path, help="enable the cinematic workspace tools for this local directory")
     args = parser.parse_args()
-    make_server(media.data_root(args.workspace)).run()
+    server = make_server(media.data_root(args.workspace))
+    if args.studio:
+        from .studio.library import Library
+        from .studio.mcp import add_tools
+
+        add_tools(server, Library(args.studio))
+    server.run()
 
 
 if __name__ == "__main__":

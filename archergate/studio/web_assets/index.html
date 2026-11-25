@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ArcherGate cinematic workspace</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<main>
+  <header><h1>ArcherGate</h1><nav aria-label="Workspace"><a href="#media">Media</a><a href="#timelines">Timelines</a><a href="#direction">Director’s Memory</a></nav></header>
+  <p id="status" role="status"></p>
+  <section id="media">
+    <h2>Media library</h2>
+    <form id="import" class="row">
+      <label>Local file path<input name="path" required placeholder="MP4, MOV, WAV or MP3"></label>
+      <label>Provenance<input name="provenance" required></label>
+      <label>Rights note<input name="rights" required></label>
+      <button>Import media</button>
+    </form>
+    <form id="search" class="row"><label>Search assets<input name="q" type="search"></label><button>Search</button></form>
+    <div class="split">
+      <ul id="assets" class="results" aria-label="Assets"></ul>
+      <article id="asset-details" aria-live="polite"><p>Select an asset to play its proxy.</p></article>
+    </div>
+  </section>
+  <section id="timelines">
+    <h2>Timelines</h2>
+    <div class="row"><label>Edit<select id="edit"></select></label><label>Compare with<select id="alternative"></select></label>
+    <button id="compare">Compare edits</button><button id="export">Export Premiere XML</button></div>
+    <div id="edit-details" class="split"></div>
+    <label for="manifest">Version 2 manifest</label>
+    <textarea id="manifest" spellcheck="false" rows="12"></textarea>
+    <div class="row"><button id="inspect">Review proposed edit</button><button id="save-edit">Save new edit</button></div>
+    <ul id="review" aria-live="polite"></ul>
+  </section>
+  <section id="direction">
+    <h2>Director’s Memory</h2>
+    <div class="split">
+      <form id="memory">
+        <input type="hidden" name="id">
+        <label>Category<select name="kind"><option>film</option><option>scene</option><option>music</option><option>aesthetic</option><option>footage</option><option>annotation</option><option>suggestion</option></select></label>
+        <label>Title<input name="title" required></label>
+        <label>Creative direction or notes<textarea name="description" rows="3" required></textarea></label>
+        <label>Reference (title, link or cue)<input name="reference"></label>
+        <label>Timestamp in seconds<input name="timestamp"></label>
+        <label>Local asset<select name="asset"></select></label>
+        <label>Suggestion decision<select name="decision"><option value="">Choose if applicable</option><option>accepted</option><option>rejected</option><option>modified</option></select></label>
+        <label>Modified suggestion<input name="revision"></label>
+        <div class="row"><button>Save record</button><button type="reset">New record</button></div>
+      </form>
+      <ul id="records" class="results" aria-label="Creative records"></ul>
+    </div>
+  </section>
+</main>
+</body>
+</html>
