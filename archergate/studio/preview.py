@@ -91,7 +91,8 @@ def render(library, name):
         graph = Path(temp) / "filters.txt"
         graph.write_text(";".join(filters), encoding="utf-8")
         ffmpeg(*args, "-filter_complex_threads", "1", "-filter_complex_script", graph,
-               "-map", f"[{picture}]", "-map", "[sound]", "-t", length, "-c:v", "libx264",
+               "-map", f"[{picture}]", "-map", "[sound]", "-t", length, "-r", str(fps), "-fps_mode", "cfr",
+               "-c:v", "libx264",
                "-preset", "veryfast", "-threads:v", "2", "-pix_fmt", "yuv420p", "-c:a", "aac",
                "-movflags", "+faststart", staged)
         info = probe(staged)

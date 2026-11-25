@@ -50,7 +50,7 @@ try {
   await page.locator("audio").evaluate(audio => { audio.muted = true; return audio.play(); });
   await page.waitForFunction(() => document.querySelector("audio").currentTime > 0.15);
   await page.getByRole("navigation", {name: "workspace"}).getByRole("link", {name: "work"}).click();
-  await page.getByRole("button", {name: "Compare edits"}).click();
+  await page.getByRole("button", {name: "differences"}).click();
   await page.getByRole("status").getByText("1 changed clip.").waitFor();
   assert.equal(await page.locator("#edit-details article").count(), 2);
   await page.getByRole("button", {name: "a/b preview"}).click();
