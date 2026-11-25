@@ -283,8 +283,8 @@ def export_manifest(workspace, edit):
     return manifest
 
 
-def render(workspace, manifest_path):
-    manifest = load_manifest(manifest_path)
+def render(workspace, manifest):
+    validate_manifest(manifest)
     with workspace_lock(workspace):
         assets = read_registry(workspace)
         paths = source_paths(workspace, manifest, assets)

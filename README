@@ -1,1 +1,110 @@
 a media production lab for documentary filmmaking
+
+ArcherGate Experiment 001
+========================
+
+The experiment makes two short edits from three labeled synthetic clips.
+A plays Signal, Transit, then Echo. B plays Echo, Signal, then Transit.
+B also shifts the source frame ranges for Echo and Transit. Each clip has
+its own color, moving marker and synthesized tone.
+
+Run the demonstration
+---------------------
+
+Open a terminal at the repository root on the experiment branch. Setup
+targets an Ubuntu 24.04 x86-64 Codespace with Python 3.14 and Node.js 24
+or newer. It downloads pinned FFmpeg, Python packages and browser test
+tools into this checkout. The downloads need internet access. Setup uses
+no sudo, system package installation, paid service or GPU.
+
+    ./scripts/setup
+    .venv/bin/python -m archergate demo
+
+The second command generates the three sources, registers them with their
+metadata and writes two playable MP4 files:
+
+    workspace/renders/edit-a.mp4
+    workspace/renders/edit-b.mp4
+
+You can download either file from the Codespaces file explorer and open it
+in a local media player. To watch and compare side by side:
+
+    .venv/bin/python -m archergate serve --port 8000
+
+In Codespaces, open the Ports tab, forward port 8000 if needed, confirm
+its visibility is Private and open it in the browser. On a local machine,
+open http://127.0.0.1:8000. Use the two video players to play, pause and
+seek. The rows below each player show cut order and source frame ranges.
+Press Ctrl+C in the terminal to stop the preview.
+
+Run the full acceptance checks after setup:
+
+    ./scripts/verify
+
+The suite generates its own media in temporary directories. It uses
+ffprobe and FFmpeg to check and decode both exports, the official MCP SDK
+to call all four tools over stdio, and Chrome for Testing to play and
+seek both videos. The test needs local socket access for the browser.
+
+Inspect and change an edit
+--------------------------
+
+    .venv/bin/python -m archergate assets
+    .venv/bin/python -m archergate inspect experiments/001/edit-a.json
+    .venv/bin/python -m archergate compare experiments/001/edit-a.json experiments/001/edit-b.json
+    .venv/bin/python -m archergate render experiments/001/edit-b.json
+
+The source registry is workspace/registry.json. A SHA-256 records each
+source's exact bytes. The registry also stores where the clip came from,
+its rights note, and its video and audio metadata. Rendering checks the
+referenced hashes and replaces the export only after media validation.
+The MP4's comment metadata embeds its manifest, source hashes and FFmpeg
+version. The CLI prints the exported file's SHA-256.
+
+Each JSON manifest lists cuts in playback order. Each cut references an
+asset ID and a start and end frame. The start is included and the end is
+excluded. At 24 fps, frames 12–60 yield 48 frames or two seconds. To try
+a change, adjust one of the demo manifests, render it again and refresh
+the page. To keep a separate export, copy a manifest, set a new ID and
+pass its file path to the render command. For an independent workspace,
+set --workspace /absolute/path before the subcommand and keep it outside
+the checkout or under the ignored workspace directory.
+
+You can register a locally held, rights-cleared clip by copying it to
+workspace/sources/my-clip.mp4, then running:
+
+    .venv/bin/python -m archergate register my-clip --provenance "Source and creation details" --rights "Permission or license details"
+
+The clip must be a 640×360, 24 fps constant-rate MP4 with one video and
+one audio stream starting at zero, with audio covering the video. Use
+a new asset ID when a clip or its provenance changes. Retain the source
+bytes, registry and manifests together to reproduce an editorial variant.
+Keep sensitive source media and provenance records in private storage.
+
+MCP
+---
+
+The local stdio server exposes inspect_assets, inspect_edit, compare_edits
+and render_edit. Edit tools accept edit-a and edit-b. Render returns the
+export path relative to the workspace, the manifest and content hashes.
+
+Configure a local MCP client to launch the checkout's absolute
+.venv/bin/python path with the arguments -m archergate.mcp_server and
+run it from the repository root. If the client uses another working
+directory, set its PYTHONPATH to this checkout's absolute path. Generate
+the demo before inspecting the registry or requesting a render. To run
+the repository's real MCP client check directly:
+
+    .venv/bin/python -m unittest discover -s tests -p test_mcp.py -v
+
+Current limits
+--------------
+
+The browser and MCP expose the two named demo exports. The CLI can render
+other manifests with up to 24 hard cuts and 60 seconds of material. The
+server is a local preview with no authentication. The browser test uses
+Ubuntu 24.04 runtime libraries unpacked into the workspace. Comparable
+source assets and cut order are reproducible, and encoded bytes can vary
+across hosts, font sets and FFmpeg builds.
+
+The plan and observed verification results are in docs/experiment-001-plan.md.

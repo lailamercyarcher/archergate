@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+.venv/bin/python -m pip check
+.venv/bin/python -m unittest discover -s tests -v
+PLAYWRIGHT_BROWSERS_PATH="$PWD/.tools/browsers" node tests/browser.mjs

@@ -34,13 +34,13 @@ def main():
         match args.command:
             case "demo":
                 generate_fixtures(args.workspace)
-                result = [media.render(args.workspace, media.MANIFESTS / f"{edit}.json") for edit in media.EDIT_IDS]
+                result = [media.render(args.workspace, media.named_manifest(edit)) for edit in media.EDIT_IDS]
             case "assets":
                 result = media.read_registry(args.workspace)
             case "register":
                 result = media.register(args.workspace, args.asset, args.provenance, args.rights)
             case "render":
-                result = media.render(args.workspace, args.manifest)
+                result = media.render(args.workspace, media.load_manifest(args.manifest))
             case "inspect":
                 result = media.timeline(media.load_manifest(args.manifest))
             case "compare":

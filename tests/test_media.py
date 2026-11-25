@@ -64,7 +64,7 @@ class MediaTests(unittest.TestCase):
         cls.originals = media.read_registry(cls.workspace)
         cls.hashes = {asset: media.sha256(cls.workspace / row["path"]) for asset, row in cls.originals.items()}
         cls.outputs = [
-            media.render(cls.workspace, media.MANIFESTS / f"{edit}.json") for edit in ORDERS
+            media.render(cls.workspace, media.named_manifest(edit)) for edit in ORDERS
         ]
 
     def test_both_outputs_decode_in_distinct_orders_and_preserve_sources(self):
