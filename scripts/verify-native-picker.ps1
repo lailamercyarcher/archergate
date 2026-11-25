@@ -6,9 +6,9 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 
-function Find-Element($Root, $Property, $Value) {
+function Find-Element($Root, $Property, $Value, $Scope = [System.Windows.Automation.TreeScope]::Descendants) {
     $condition = New-Object System.Windows.Automation.PropertyCondition($Property, $Value)
-    $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    $Root.FindFirst($Scope, $condition)
 }
 
 function Wait-Element([string]$Description, [scriptblock]$Find) {
@@ -26,11 +26,13 @@ $name = [System.Windows.Automation.AutomationElement]::NameProperty
 $id = [System.Windows.Automation.AutomationElement]::AutomationIdProperty
 $type = [System.Windows.Automation.AutomationElement]::ControlTypeProperty
 $window = [System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
-$import = Wait-Element 'the WebView2 import button' { Find-Element $window $name '+ import' }
+$import = Wait-Element 'the empty workspace import button' { Find-Element $window $name 'import footage' }
 $import.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 
 $desktop = [System.Windows.Automation.AutomationElement]::RootElement
-$dialog = Wait-Element 'the native media picker' { Find-Element $desktop $name 'Select original media' }
+$dialog = Wait-Element 'the native media picker' {
+    Find-Element $desktop $name 'Select original media' ([System.Windows.Automation.TreeScope]::Children)
+}
 if ($dialog.Current.ControlType -ne [System.Windows.Automation.ControlType]::Window -or $dialog.Current.ProcessId -ne $AppPid) {
     throw 'The media picker did not open as a native window owned by ArcherGate.'
 }

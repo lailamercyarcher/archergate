@@ -84,7 +84,7 @@ On 2026-11-25, the live remote branch `test/media-correctness-harness` reported 
 - Chromium selected a clip, placed the playhead with the slider, split at tick 84, dragged the right clip to tick 96 and trimmed three ticks with its edge handle. A drag into an occupied interval was rejected. The speech test selected a real whisper.cpp transcript row, checked its registered source hash and timestamps, and decoded audio from the rendered passage.
 - Decoded video at 24 fps verified the picture dissolve began at frame 24, reached the midpoint at frame 36 and left unrelated picture unchanged. The outgoing fade reached its midpoint at frame 84. Independently timed AAC samples contained both tones at half amplitude midway through the crossfade. Later samples matched the expected −6 dB and −12 dB automation gains.
 - The official MCP SDK repeated the insert, trim, split and move commands over stdio, agreed with authenticated HTTP revisions, rejected an overlapping move, and reopened all six revisions in a separate client process. The core regression passed five Python tests and Chromium playback, seeking and byte-range checks. Both historical ZIP copies and the published installer matched their saved SHA-256 checksums.
-- The Windows workflow passed `actionlint`. Windows package generation and native picker results require a real Windows run. The external filmmaker session remains pending.
+- The Windows workflow passed `actionlint`, and PowerShell parsed the package build, native smoke and picker scripts. Windows package generation and native picker results require a real Windows run. The external filmmaker session remains pending.
 
 Earlier verification on this work is retained below.
 
