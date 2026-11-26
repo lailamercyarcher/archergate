@@ -60,7 +60,9 @@ try {
     Invoke-BuildCommand 'npx.cmd' ($tauri + @('--version'))
 
     Invoke-BuildCommand $PythonExecutable ($python + @('scripts/prepare-workstation.py'))
-    Invoke-BuildCommand 'npx.cmd' ($tauri + @('build', '--target', $target, '--ci', '--no-sign', '--', '--locked'))
+    # This alpha ships one installer format and uses the same executable in the portable ZIP.
+    Invoke-BuildCommand 'npx.cmd' ($tauri + @('build', '--target', $target, '--ci', '--no-sign',
+        '--no-binary-patching', '--', '--locked'))
 
     $release = Join-Path $env:CARGO_TARGET_DIR "$target/release"
     $exe = Get-Item -LiteralPath (Join-Path $release "$($config.mainBinaryName).exe")
