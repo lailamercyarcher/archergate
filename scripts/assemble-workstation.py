@@ -60,9 +60,13 @@ def main():
         if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
     }
     required = set(REQUIRED) | engine.keys()
-    missing = [name for name in sorted(required) if not (payload / name).is_file() or not (payload / name).stat().st_size]
+    missing = [name for name in sorted(required) if not (payload / name).is_file()]
     if missing:
         raise ValueError(f"Missing required payload files: {', '.join(missing)}")
+    empty = [name for name in sorted(REQUIRED) if (payload / name).stat().st_size == 0]
+    if empty:
+        raise ValueError(f"Empty required payload files: {', '.join(empty)}")
+    # Engine files must match the checkout, including empty package markers.
     for name, source in engine.items():
         if not cmp(source, payload / name, shallow=False):
             raise ValueError(f"Packaged engine differs from the checkout: {name}")
