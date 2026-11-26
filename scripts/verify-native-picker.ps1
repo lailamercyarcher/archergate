@@ -5,6 +5,39 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class NativePickerInput
+{
+    private const uint WM_SETTEXT = 0x000C;
+    private const uint WM_COMMAND = 0x0111;
+    private const uint SMTO_ABORTIFHUNG = 0x0002;
+    private const uint IDOK = 1;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern IntPtr SendMessageTimeoutW(
+        IntPtr window, uint message, UIntPtr wParam, string lParam,
+        uint flags, uint timeout, out UIntPtr result);
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessageW(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
+
+    public static void Choose(IntPtr dialog, IntPtr edit, IntPtr open, string filename)
+    {
+        UIntPtr result;
+        if (SendMessageTimeoutW(edit, WM_SETTEXT, UIntPtr.Zero, filename,
+                                SMTO_ABORTIFHUNG, 5000, out result) == IntPtr.Zero || result == UIntPtr.Zero)
+            throw new InvalidOperationException("The native file name box rejected the fixture path.");
+
+        // BN_CLICKED is zero in the high word. The low word identifies the Open button.
+        if (!PostMessageW(dialog, WM_COMMAND, new UIntPtr(IDOK), open))
+            throw new InvalidOperationException("The native file dialog rejected the Open command.");
+    }
+}
+'@
 
 function Find-Element($Root, $Property, $Value, $Scope = [System.Windows.Automation.TreeScope]::Descendants) {
     $condition = New-Object System.Windows.Automation.PropertyCondition($Property, $Value)
@@ -24,8 +57,6 @@ function Wait-Element([string]$Description, [scriptblock]$Find) {
 $app = Get-Process -Id $AppPid
 $name = [System.Windows.Automation.AutomationElement]::NameProperty
 $id = [System.Windows.Automation.AutomationElement]::AutomationIdProperty
-$class = [System.Windows.Automation.AutomationElement]::ClassNameProperty
-$type = [System.Windows.Automation.AutomationElement]::ControlTypeProperty
 $descendants = [System.Windows.Automation.TreeScope]::Descendants
 $window = [System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
 $import = Wait-Element 'the empty workspace import button' { Find-Element $window $name 'import footage' }
@@ -38,44 +69,24 @@ $dialog = Wait-Element 'the native media picker' {
 if ($dialog.Current.ControlType -ne [System.Windows.Automation.ControlType]::Window -or $dialog.Current.ProcessId -ne $AppPid) {
     throw 'The media picker did not open as a native window owned by ArcherGate.'
 }
-$edit = [System.Windows.Automation.ControlType]::Edit
-$valuePattern = [System.Windows.Automation.ValuePattern]::Pattern
-# Windows can expose the filename as an edit or as a control hosted by the shell's combo box.
-$filenameCondition = [System.Windows.Automation.OrCondition]::new([System.Windows.Automation.Condition[]]@(
-    [System.Windows.Automation.PropertyCondition]::new($id, '1148')
-    [System.Windows.Automation.PropertyCondition]::new($name, 'File name:')
-    [System.Windows.Automation.PropertyCondition]::new($class, 'FileNameControlHost')
-))
-try {
-    $filenameValue = Wait-Element 'the native file name field' {
-        foreach ($candidate in $dialog.FindAll($descendants, $filenameCondition)) {
-            $control = $candidate
-            if ($control.Current.ControlType -ne $edit) {
-                $child = Find-Element $candidate $type $edit
-                if ($child) { $control = $child }
-            }
-            if ($control.Current.IsEnabled -and -not $control.Current.IsOffscreen) {
-                $pattern = $null
-                if ($control.TryGetCurrentPattern($valuePattern, [ref]$pattern) -and -not $pattern.Current.IsReadOnly) {
-                    return $pattern
-                }
-            }
+# The Windows runner exposes both dialog controls as panes without Value or Invoke patterns.
+# Identify the HWNDs inside the owned dialog by their native classes and IDs.
+$filename = Wait-Element 'the native file name field' {
+    $filenameId = [System.Windows.Automation.PropertyCondition]::new($id, '1148')
+    foreach ($candidate in $dialog.FindAll($descendants, $filenameId)) {
+        if ($candidate.Current.ClassName -eq 'Edit' -and $candidate.Current.NativeWindowHandle -ne 0) {
+            return $candidate
         }
     }
-} catch {
-    Write-Host 'Native picker automation elements:'
-    foreach ($element in $dialog.FindAll($descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
-        $current = $element.Current
-        if ($current.Name -or $current.AutomationId -or $current.ClassName) {
-            Write-Host ('{0} id={1} class={2} name={3}' -f $current.ControlType.ProgrammaticName,
-                $current.AutomationId, $current.ClassName, $current.Name)
-        }
-    }
-    throw
 }
-$filenameValue.SetValue($Fixture)
-$open = Wait-Element 'the native Open button' { Find-Element $dialog $id '1' }
-$open.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+$open = Wait-Element 'the native Open button' {
+    $button = Find-Element $dialog $id '1'
+    if ($button -and $button.Current.ClassName -eq 'Button' -and $button.Current.NativeWindowHandle -ne 0) { $button }
+}
+if ($dialog.Current.NativeWindowHandle -eq 0) { throw 'The native picker has no window handle.' }
+[NativePickerInput]::Choose([IntPtr]$dialog.Current.NativeWindowHandle,
+    [IntPtr]$filename.Current.NativeWindowHandle, [IntPtr]$open.Current.NativeWindowHandle, $Fixture)
+Write-Host 'Submitted the fixture through the native file dialog.'
 
 $label = '1 file ready ' + [char]0x00B7 + ' ' + (Split-Path -Leaf $Fixture)
 $null = Wait-Element 'the selected filename in the WebView2 import form' { Find-Element $window $name $label }
